@@ -1,0 +1,628 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":configMigration"],
+  "labels": ["Renovate"],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 10,
+  "assignees": ["aazw"],
+  "ignorePaths": [],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_MAKE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "make"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_BUILD_ESSENTIAL_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "build-essential"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBXCB1_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libxcb1-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBXCB_RENDER0_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libxcb-render0-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBXCB_SHAPE0_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libxcb-shape0-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBXCB_XFIXES0_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libxcb-xfixes0-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_BASH_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "bash"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_ZSH_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "zsh"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GNUPG_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "gnupg"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_CA_CERTIFICATES_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "ca-certificates"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_CURL_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "curl"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_WGET_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "wget"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GIT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "git"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_TREE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "tree"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_NANO_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "nano"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_LESS_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "less"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_ZIP_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "zip"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GZIP_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "gzip"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_UNZIP_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "unzip"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_TAR_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "tar"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_XZ_UTILS_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "xz-utils"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LOCALES_ALL_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "locales-all"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_PROCPS_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "procps"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_SUDO_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "sudo"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_FZF_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "fzf"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_MAN_DB_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "man-db"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GNUPG2_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "gnupg2"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GH_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "gh"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_IPTABLES_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "iptables"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_IPSET_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "ipset"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_IPROUTE2_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "iproute2"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_DNSUTILS_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "dnsutils"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_AGGREGATE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "aggregate"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_EXPAT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "expat"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_LIBPQ_DEV_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libpq-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_DOCKERFMT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/reteps/dockerfmt",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_SHFMT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "mvdan.cc/sh/v3",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_GO_TASK_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/go-task/task/v3",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_CURLIE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/rs/curlie",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_USQL_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/xo/usql",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_EZA_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "eza",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_TOKEI_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "tokei",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_FD_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "fd-find",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_BAT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "bat",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_LSD_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "lsd",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_BROOT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "broot",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_NPM_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "npm",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_PRETTIER_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "prettier",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_RENOVATE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "renovate",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_CLAUDE_CODE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@anthropic-ai/claude-code",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_CCUSAGE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "ccusage",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+NPM_REPOMIX_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "repomix",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_PIP_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "pip",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_PIPX_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "pipx",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_WHEEL_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "wheel",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_UV_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "uv",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_RUFF_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "ruff",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_HTTPIE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "httpie",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_PGCLI_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "pgcli",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+PIP_GITINGEST_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "gitingest",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_JQ_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "jqlang/jq",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_YQ_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "mikefarah/yq",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_XQ_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "sibprogrammer/xq",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_TAPLO_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "tamasfe/taplo",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_SHELLCHECK_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "koalaman/shellcheck",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_RIPGREP_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "BurntSushi/ripgrep",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_HADOLINT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "hadolint/hadolint",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_GITLEAKS_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "gitleaks/gitleaks",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+OTHER_FZF_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "junegunn/fzf",
+      "versioningTemplate": "semver-coerced"
+    }
+  ],
+  "packageRules": [
+    {
+      "enabled": false,
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["npm"],
+      "matchDepNames": ["renovate"],
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "matchFileNames": [".devcontainer/**"],
+      "groupName": "devcontainer"
+    },
+    {
+      "matchFileNames": [".github/workflows/*.yaml"],
+      "groupName": "githubactions"
+    }
+  ]
+}
