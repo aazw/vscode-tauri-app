@@ -13,8 +13,13 @@ if [[ "$(uname)" != "Darwin" ]]; then
 	exit 1
 fi
 
-# 依存関係インストール
+# Rustビルドキャッシュを削除
+cd src-tauri
+cargo clean
+
+# 依存関係インストール (再インストール)
+rm -rf node_modules/*
 npm install
 
 # macOS向けにビルド
-npm run tauri build -- --target aarch64-apple-darwin
+npm run tauri build -- --target aarch64-apple-darwin --no-bundle
