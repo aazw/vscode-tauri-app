@@ -16,3 +16,33 @@ tasks:
     cmds:
       - find . -name ".DS_Store" -delete -print
     silent: true
+
+  check_deps_diff:
+    dir: "{{ .TASKFILE_DIR }}"
+    cmds:
+      - |
+        #!/bin/bash
+        set -e
+
+        # 一時ファイル
+        RENOVATE_TEMP=$(mktemp)
+        DOCKERFILE_TEMP=$(mktemp)
+
+        # クリーンアップを予約
+        trap 'rm -f "$RENOVATE_TEMP" "$DOCKERFILE_TEMP"' EXIT
+
+        # DEBIAN_XXX_VERSIONを抽出
+        cat renovate.json | jq -r ".customManagers[].matchStrings[]" | \
+        grep -o '\(DEBIAN\|GO\|CARGO\|NPM\|PIP\|PIPX\|OTHER\)_[A-Z0-9_]*_VERSION' | sort -u > "$RENOVATE_TEMP"
+
+        cat .devcontainer/Dockerfile | grep "ARG " | \
+        grep -o '\(DEBIAN\|GO\|CARGO\|NPM\|PIP\|PIPX\|OTHER\)_[A-Z0-9_]*_VERSION' | sort -u > "$DOCKERFILE_TEMP"
+
+        # 差分を表示
+        echo "Renovate.json にのみ存在:"
+        comm -23 "$RENOVATE_TEMP" "$DOCKERFILE_TEMP"
+
+        echo ""
+        echo "Dockerfile にのみ存在:"
+        comm -13 "$RENOVATE_TEMP" "$DOCKERFILE_TEMP"
+    silent: true

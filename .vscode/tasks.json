@@ -2,9 +2,23 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Remove all system files",
+      "label": "System: Remove all system files",
       "type": "shell",
       "command": "task remove_system_files",
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Renovate: Check diffs of dependencies",
+      "type": "shell",
+      "command": "task check_deps_diff",
       "group": "none",
       "presentation": {
         "reveal": "always",

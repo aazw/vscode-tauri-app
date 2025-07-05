@@ -305,6 +305,80 @@
       "customType": "regex",
       "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
       "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_LIBC6_DEV_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libc6-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_GCC_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "gcc"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBWEBKIT2GTK_4_1_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libwebkit2gtk-4.1-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+DEBIAN_FILE_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "file"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBXDO_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libxdo-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBSSL_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libssl-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBAYATANA_APPINDICATOR3_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "libayatana-appindicator3-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+DEBIAN_LIBRSVG2_DEV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "deb",
+      "depNameTemplate": "librsvg2-dev"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
       "matchStrings": ["ARG\\s+GO_DOCKERFMT_VERSION=(?<currentValue>\\S+)"],
       "datasourceTemplate": "go",
       "depNameTemplate": "github.com/reteps/dockerfmt",
@@ -350,6 +424,15 @@
       "customType": "regex",
       "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
       "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+GO_YAMLFMT_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/google/yamlfmt/cmd/yamlfmt",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
       "matchStrings": ["ARG\\s+CARGO_EZA_VERSION=(?<currentValue>\\S+)"],
       "datasourceTemplate": "crate",
       "depNameTemplate": "eza",
@@ -362,6 +445,15 @@
       "matchStrings": ["ARG\\s+CARGO_TOKEI_VERSION=(?<currentValue>\\S+)"],
       "datasourceTemplate": "crate",
       "depNameTemplate": "tokei",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
+      "matchStrings": ["ARG\\s+CARGO_DELTA_VERSION=(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate",
+      "depNameTemplate": "delta",
       "versioningTemplate": "semver-coerced"
     },
     {
@@ -458,6 +550,17 @@
       "customType": "regex",
       "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
       "matchStringsStrategy": "any",
+      "matchStrings": [
+        "ARG\\s+NPM_CREATE_TAURI_APP_VERSION=(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "create-tauri-app",
+      "versioningTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
+      "matchStringsStrategy": "any",
       "matchStrings": ["ARG\\s+PIP_PIP_VERSION=(?<currentValue>\\S+)"],
       "datasourceTemplate": "pypi",
       "depNameTemplate": "pip",
@@ -470,33 +573,6 @@
       "matchStrings": ["ARG\\s+PIP_PIPX_VERSION=(?<currentValue>\\S+)"],
       "datasourceTemplate": "pypi",
       "depNameTemplate": "pipx",
-      "versioningTemplate": "pep440"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
-      "matchStringsStrategy": "any",
-      "matchStrings": ["ARG\\s+PIP_WHEEL_VERSION=(?<currentValue>\\S+)"],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "wheel",
-      "versioningTemplate": "pep440"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
-      "matchStringsStrategy": "any",
-      "matchStrings": ["ARG\\s+PIP_UV_VERSION=(?<currentValue>\\S+)"],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "uv",
-      "versioningTemplate": "pep440"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/^\\.devcontainer\\/Dockerfile$/"],
-      "matchStringsStrategy": "any",
-      "matchStrings": ["ARG\\s+PIP_RUFF_VERSION=(?<currentValue>\\S+)"],
-      "datasourceTemplate": "pypi",
-      "depNameTemplate": "ruff",
       "versioningTemplate": "pep440"
     },
     {

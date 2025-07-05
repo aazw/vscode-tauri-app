@@ -51,6 +51,14 @@ ARG DEBIAN_DNSUTILS_VERSION=1:9.18.33-1~deb12u2
 ARG DEBIAN_AGGREGATE_VERSION=1.6-7+b1
 ARG DEBIAN_EXPAT_VERSION=2.5.0-1+deb12u1
 ARG DEBIAN_LIBPQ_DEV_VERSION=15.13-0+deb12u1
+ARG DEBIAN_LIBC6_DEV_VERSION=2.36-9+deb12u10
+ARG DEBIAN_GCC_VERSION=4:12.2.0-3
+ARG DEBIAN_LIBWEBKIT2GTK_4_1_DEV_VERSION=2.48.3-1~deb12u1
+ARG DEBIAN_FILE_VERSION=1:5.44-3
+ARG DEBIAN_LIBXDO_DEV_VERSION=1:3.20160805.1-5
+ARG DEBIAN_LIBSSL_DEV_VERSION=3.0.16-1~deb12u1
+ARG DEBIAN_LIBAYATANA_APPINDICATOR3_DEV_VERSION=0.5.92-1
+ARG DEBIAN_LIBRSVG2_DEV_VERSION=2.54.7+dfsg-1~deb12u1
 
 # for go tools
 ARG GO_DOCKERFMT_VERSION=v0.3.7
@@ -58,6 +66,7 @@ ARG GO_SHFMT_VERSION=v3.11.0
 ARG GO_GO_TASK_VERSION=v3.44.0
 ARG GO_CURLIE_VERSION=v1.8.2
 ARG GO_USQL_VERSION=v0.19.24
+ARG GO_YAMLFMT_VERSION=v0.17.2
 
 # for cargo tools
 ARG CARGO_EZA_VERSION=0.21.4
@@ -75,13 +84,11 @@ ARG NPM_RENOVATE_VERSION=41.15.0
 ARG NPM_CLAUDE_CODE_VERSION=1.0.40
 ARG NPM_CCUSAGE_VERSION=15.2.0
 ARG NPM_REPOMIX_VERSION=1.0.0
+ARG NPM_CREATE_TAURI_APP_VERSION=4.5.9
 
 # for pip tools
 ARG PIP_PIP_VERSION=25.1.1
 ARG PIP_PIPX_VERSION=1.7.1
-ARG PIP_WHEEL_VERSION=0.45.1
-ARG PIP_UV_VERSION=0.7.18
-ARG PIP_RUFF_VERSION=0.12.1
 ARG PIP_HTTPIE_VERSION=3.2.4
 ARG PIP_PGCLI_VERSION=4.3.0
 ARG PIP_GITINGEST_VERSION=0.1.5
@@ -135,6 +142,12 @@ RUN go install github.com/rs/curlie@${GO_CURLIE_VERSION} \
 ARG GO_USQL_VERSION
 RUN go install -tags most github.com/xo/usql@${GO_USQL_VERSION} \
     && usql --version
+
+# yamlfmt
+# https://github.com/google/yamlfmt
+ARG GO_YAMLFMT_VERSION
+RUN go install github.com/google/yamlfmt/cmd/yamlfmt@${GO_YAMLFMT_VERSION} \
+    && yamlfmt --version
 
 # rust
 # https://hub.docker.com/_/rust
@@ -264,11 +277,6 @@ RUN apt-get update -y \
         locales-all=${DEBIAN_LOCALES_ALL_VERSION} \
     && rm -rf /var/lib/apt/lists/*
 
-# golang
-# refs above
-COPY --from=golang-builder /usr/local/go /usr/local/go
-ENV PATH=/usr/local/go/bin/:$PATH
-
 # dockerfmt
 # refs above
 COPY --from=golang-builder /go/bin/dockerfmt /usr/local/bin/
@@ -288,6 +296,26 @@ COPY --from=golang-builder /go/bin/curlie /usr/local/bin/
 # usql
 # refs above
 COPY --from=golang-builder /go/bin/usql /usr/local/bin/
+
+# yamlfmt
+# refs above
+COPY --from=golang-builder /go/bin/yamlfmt /usr/local/bin/
+
+# rust
+# refs above
+ARG DEBIAN_LIBC6_DEV_VERSION
+ARG DEBIAN_GCC_VERSION
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+        libc6-dev=${DEBIAN_LIBC6_DEV_VERSION} \
+        gcc=${DEBIAN_GCC_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=rust-builder /usr/local/cargo /usr/local/cargo
+COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
+ENV PATH=/usr/local/cargo/bin/:$PATH
+ENV RUSTUP_HOME=/usr/local/rustup
+RUN cargo --version \
+    && rustup --version
 
 # eza
 # refs above
@@ -433,25 +461,6 @@ RUN pip install pipx==${PIP_PIPX_VERSION}
 RUN pipx ensurepath \
     && pipx --version
 
-# wheel
-# https://pypi.org/project/wheel/
-ARG PIP_WHEEL_VERSION
-RUN pip install wheel==${PIP_WHEEL_VERSION} \
-    && wheel version
-
-# uv
-# https://github.com/astral-sh/uv
-# https://pypi.org/project/uv/
-ARG PIP_UV_VERSION
-RUN pip install uv==${PIP_UV_VERSION} \
-    && uv --version
-
-# ruff
-# https://github.com/astral-sh/ruff
-ARG PIP_RUFF_VERSION
-RUN pip install ruff==${PIP_RUFF_VERSION} \
-    && ruff --version
-
 # httpie
 # https://github.com/httpie/cli
 # https://httpie.io/docs/cli/installation
@@ -592,6 +601,32 @@ RUN ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/') \
     && cd / \
     && fzf --version
 
+# tauri
+ARG DEBIAN_LIBWEBKIT2GTK_4_1_DEV_VERSION
+ARG DEBIAN_BUILD_ESSENTIAL_VERSION
+ARG DEBIAN_CURL_VERSION
+ARG DEBIAN_WGET_VERSION
+ARG DEBIAN_FILE_VERSION
+ARG DEBIAN_LIBXDO_DEV_VERSION
+ARG DEBIAN_LIBSSL_DEV_VERSION
+ARG DEBIAN_LIBAYATANA_APPINDICATOR3_DEV_VERSION
+ARG DEBIAN_LIBRSVG2_DEV_VERSION
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+        libwebkit2gtk-4.1-dev=${DEBIAN_LIBWEBKIT2GTK_4_1_DEV_VERSION} \
+        build-essential=${DEBIAN_BUILD_ESSENTIAL_VERSION} \
+        curl=${DEBIAN_CURL_VERSION} \
+        wget=${DEBIAN_WGET_VERSION} \
+        file=${DEBIAN_FILE_VERSION} \
+        libxdo-dev=${DEBIAN_LIBXDO_DEV_VERSION} \
+        libssl-dev=${DEBIAN_LIBSSL_DEV_VERSION} \
+        libayatana-appindicator3-dev=${DEBIAN_LIBAYATANA_APPINDICATOR3_DEV_VERSION} \
+        librsvg2-dev=${DEBIAN_LIBRSVG2_DEV_VERSION} \
+    && rm -rf /var/lib/apt/lists/*
+ARG NPM_CREATE_TAURI_APP_VERSION
+RUN npm install -g create-tauri-app@${NPM_CREATE_TAURI_APP_VERSION} \
+    && create-tauri-app --version
+
 # add vscode user
 # https://code.visualstudio.com/remote/advancedcontainers/add-nonroot-user#_creating-a-nonroot-user
 ARG USERNAME=vscode
@@ -610,12 +645,14 @@ RUN groupadd --gid $USER_GID $USERNAME \
 USER $USERNAME
 
 # check tools
-RUN go version \
-    && dockerfmt version \
+RUN dockerfmt version \
     && shfmt --version \
     && task --version \
     && curlie --version \
     && usql --version \
+    && yamlfmt --version \
+    && cargo --version \
+    && rustup --version \
     && eza --version \
     && tokei --version \
     && delta --version \
@@ -634,9 +671,6 @@ RUN go version \
     && python --version \
     && pip --version \
     && pipx --version \
-    && wheel version \
-    && uv --version \
-    && ruff --version \
     && httpie --version \
     && pgcli --version \
     # && gitingest --version  \
@@ -648,4 +682,5 @@ RUN go version \
     && rg --version \
     && hadolint --version \
     && gitleaks --version \
-    && fzf --version
+    && fzf --version \
+    && create-tauri-app --version
