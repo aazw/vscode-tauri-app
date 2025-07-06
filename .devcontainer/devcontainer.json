@@ -19,7 +19,8 @@
         "ms-azuretools.vscode-containers",
         "ms-azuretools.vscode-docker",
         "tauri-apps.tauri-vscode",
-        "rust-lang.rust-analyzer"
+        "rust-lang.rust-analyzer",
+        "qwtel.sqlite-viewer"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash"
@@ -46,6 +47,8 @@
     "--name",
     "vsc-tauri-app",
     "--add-host",
-    "host.docker.internal:host-gateway"
+    "host.docker.internal:host-gateway",
+    "--memory=4g",
+    "--memory-swap=4g"
   ]
 }

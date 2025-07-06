@@ -59,6 +59,8 @@ ARG DEBIAN_LIBXDO_DEV_VERSION=1:3.20160805.1-5
 ARG DEBIAN_LIBSSL_DEV_VERSION=3.0.16-1~deb12u1
 ARG DEBIAN_LIBAYATANA_APPINDICATOR3_DEV_VERSION=0.5.92-1
 ARG DEBIAN_LIBRSVG2_DEV_VERSION=2.54.7+dfsg-1~deb12u1
+ARG DEBIAN_LSOF_VERSION=4.95.0-1
+ARG DEBIAN_SQLITE3_VERSION=3.40.1-2+deb12u1
 
 # for go tools
 ARG GO_DOCKERFMT_VERSION=v0.3.7
@@ -257,6 +259,8 @@ ARG DEBIAN_UNZIP_VERSION
 ARG DEBIAN_TAR_VERSION
 ARG DEBIAN_XZ_UTILS_VERSION
 ARG DEBIAN_LOCALES_ALL_VERSION
+ARG DEBIAN_LSOF_VERSION
+ARG DEBIAN_SQLITE3_VERSION
 RUN apt-get update -y \
     && apt-get install -y --no-install-recommends \
         bash=${DEBIAN_BASH_VERSION} \
@@ -275,6 +279,8 @@ RUN apt-get update -y \
         tar=${DEBIAN_TAR_VERSION} \
         xz-utils=${DEBIAN_XZ_UTILS_VERSION} \
         locales-all=${DEBIAN_LOCALES_ALL_VERSION} \
+        lsof=${DEBIAN_LSOF_VERSION} \
+        sqlite3=${DEBIAN_SQLITE3_VERSION} \
     && rm -rf /var/lib/apt/lists/*
 
 # dockerfmt
@@ -316,6 +322,8 @@ ENV PATH=/usr/local/cargo/bin/:$PATH
 ENV RUSTUP_HOME=/usr/local/rustup
 RUN cargo --version \
     && rustup --version
+
+RUN rustup component add rustfmt clippy rust-src llvm-tools-preview
 
 # eza
 # refs above

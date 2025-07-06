@@ -1,8 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// @ts-expect-error process is a nodejs global
-const host = process.env.TAURI_DEV_HOST;
+// Removed unused host variable
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -16,17 +15,18 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
-      : undefined,
+    host: "0.0.0.0", // Allow external connections from any IP
+    hmr: {
+      protocol: "ws",
+      host: "localhost",
+      port: 1421,
+    },
     watch: {
       // 3. tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },
+  // Copy database files to public directory for web access
+  publicDir: 'public',
+  assetsInclude: ['**/*.sqlite3', '**/*.sql']
 }));
