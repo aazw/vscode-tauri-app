@@ -83,58 +83,110 @@ export interface WorkflowRun {
   updated_at: string;
 }
 
-export interface DashboardStats {
-  issues: {
+export interface IssueStats {
+  total: number;
+  open: number;
+  closed: number;
+  assigned: number;
+}
+
+export interface PullRequestStats {
+  total: number;
+  open: number;
+  merged: number;
+  closed: number;
+  assigned: number;
+}
+
+export interface WorkflowStats {
+  total: number;
+  success: number;
+  failure: number;
+  in_progress: number;
+  cancelled: number;
+}
+
+export interface PaginationParams {
+  page: number;
+  per_page: number;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    per_page: number;
     total: number;
-    open: number;
-    closed: number;
-    assigned: number;
+    total_pages: number;
   };
-  pullRequests: {
-    total: number;
-    open: number;
-    merged: number;
-    closed: number;
-    assigned: number;
-  };
-  workflows: {
-    total: number;
-    success: number;
-    failure: number;
-    in_progress: number;
-    cancelled: number;
-  };
+}
+
+export interface IssueFilters {
+  state?: 'open' | 'closed' | 'all';
+  assigned?: 'me' | 'any';
+  provider?: string;
+  repository?: string;
+  search?: string;
+}
+
+export interface PullRequestFilters {
+  state?: 'open' | 'closed' | 'merged' | 'all';
+  assigned?: 'me' | 'any';
+  provider?: string;
+  repository?: string;
+  search?: string;
+}
+
+export interface WorkflowFilters {
+  status?: 'success' | 'failure' | 'in_progress' | 'cancelled' | 'all';
+  provider?: string;
+  repository?: string;
+  search?: string;
+}
+
+export interface CreateProviderRequest {
+  name: string;
+  provider_type: string;
+  base_url: string;
+  token: string | null;
+}
+
+export interface CreateRepositoryRequest {
+  provider_id: string;
+  repository_url: string;
 }
 
 export interface AppBackend {
   // Provider operations
   getProviders(): Promise<GitProvider[]>;
-  addProvider(provider: Omit<GitProvider, 'id' | 'created_at' | 'updated_at'>): Promise<string>;
+  getProvider(providerId: string): Promise<GitProvider>;
+  addProvider(provider: CreateProviderRequest): Promise<string>;
   updateProviderToken(providerId: string, token: string | null): Promise<void>;
   deleteProvider(providerId: string): Promise<void>;
 
   // Repository operations
   getRepositories(providerId?: string): Promise<Repository[]>;
-  getAllRepositories(): Promise<Repository[]>;
-  addRepository(repository: Omit<Repository, 'id' | 'created_at' | 'updated_at'>): Promise<string>;
+  getRepository(repositoryId: string): Promise<Repository>;
+  addRepository(repository: CreateRepositoryRequest): Promise<string>;
   deleteRepository(repositoryId: string): Promise<void>;
 
   // Issue operations
-  getIssues(repositoryId?: string): Promise<Issue[]>;
-  getAllIssues(): Promise<Issue[]>;
-  createIssue(issue: Omit<Issue, 'id' | 'created_at' | 'updated_at'>): Promise<string>;
-  updateIssue(issueId: string, updates: Partial<Pick<Issue, 'title' | 'body' | 'state'>>): Promise<void>;
+  getIssues(filters?: IssueFilters, pagination?: PaginationParams): Promise<PaginatedResponse<Issue>>;
+  getIssue(issueId: string): Promise<Issue>;
+  getIssueStats(filters?: IssueFilters): Promise<IssueStats>;
 
   // Pull Request operations
-  getPullRequests(repositoryId?: string): Promise<PullRequest[]>;
-  getAllPullRequests(): Promise<PullRequest[]>;
-  createPullRequest(pr: Omit<PullRequest, 'id' | 'created_at' | 'updated_at'>): Promise<string>;
-  updatePullRequest(prId: string, updates: Partial<Pick<PullRequest, 'title' | 'body' | 'state'>>): Promise<void>;
+  getPullRequests(filters?: PullRequestFilters, pagination?: PaginationParams): Promise<PaginatedResponse<PullRequest>>;
+  getPullRequest(prId: string): Promise<PullRequest>;
+  getPullRequestStats(filters?: PullRequestFilters): Promise<PullRequestStats>;
 
   // Workflow operations
-  getWorkflows(repositoryId?: string): Promise<WorkflowRun[]>;
-  getAllWorkflows(): Promise<WorkflowRun[]>;
+  getWorkflows(filters?: WorkflowFilters, pagination?: PaginationParams): Promise<PaginatedResponse<WorkflowRun>>;
+  getWorkflow(workflowId: string): Promise<WorkflowRun>;
+  getWorkflowStats(filters?: WorkflowFilters): Promise<WorkflowStats>;
 
-  // Dashboard stats
-  getDashboardStats(): Promise<DashboardStats>;
+  // Sync operations
+  syncProvider(providerId: string): Promise<void>;
+  syncAllProviders(): Promise<void>;
+  syncRepository(repositoryId: string): Promise<void>;
 }

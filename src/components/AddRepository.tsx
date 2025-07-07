@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBackend } from "../backends/BackendProvider";
 import { GitProvider, Repository } from "../types/AppBackend";
-import "./AddRepository.css";
 
 
 const AddRepository = () => {
@@ -114,111 +113,101 @@ const AddRepository = () => {
   const isFormValid = formData.provider_id && formData.repository_url && validateUrl(formData.repository_url);
 
   return (
-    <div className="add-repository-page">
-      <div className="add-repository-header">
-        <button 
-          className="back-button"
-          onClick={() => navigate("/repositories")}
-        >
-          ← Back to Repositories
-        </button>
-        <h1>Add New Repository</h1>
+    <div className="flex flex-col h-full p-6">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-gray-900">Add New Repository</h1>
+        <p className="text-gray-600 mt-1">Track a repository in your dashboard</p>
       </div>
 
-      <div className="add-repository-form-container">
-        <form onSubmit={handleSubmit} className="add-repository-form">
-          <div className="form-group">
-            <label htmlFor="provider_id">Git Provider</label>
-            <select
-              id="provider_id"
-              name="provider_id"
-              value={formData.provider_id}
-              onChange={handleInputChange}
-              className="form-input"
-              required
-            >
-              <option value="">Select a provider</option>
-              {providers.map(provider => (
-                <option key={provider.id} value={provider.id}>
-                  {getProviderIcon(provider.provider_type)} {provider.name}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div className="flex-1">
+        {/* Form */}
+        <div className="bg-white border-t border-b border-gray-300 max-w-2xl">
+          <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <div>
+              <label htmlFor="provider_id" className="block text-sm font-medium text-gray-700 mb-2">
+                Git Provider
+              </label>
+              <select
+                id="provider_id"
+                name="provider_id"
+                value={formData.provider_id}
+                onChange={handleInputChange}
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              >
+                <option value="">Select a provider</option>
+                {providers.map(provider => (
+                  <option key={provider.id} value={provider.id}>
+                    {getProviderIcon(provider.provider_type)} {provider.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div className="form-group">
-            <label htmlFor="repository_url">Repository URL</label>
-            <input
-              type="text"
-              id="repository_url"
-              name="repository_url"
-              value={formData.repository_url}
-              onChange={handleInputChange}
-              placeholder="https://github.com/user/repo.git or git@github.com:user/repo.git"
-              className="form-input"
-              required
-            />
-            <small className="form-help">
-              Enter the repository URL to track it in your dashboard. No cloning will be performed.
-            </small>
-            {formData.repository_url && !validateUrl(formData.repository_url) && (
-              <small className="form-error">
-                Please enter a valid Git repository URL
-              </small>
-            )}
-          </div>
+            <div>
+              <label htmlFor="repository_url" className="block text-sm font-medium text-gray-700 mb-2">
+                Repository URL
+              </label>
+              <input
+                type="text"
+                id="repository_url"
+                name="repository_url"
+                value={formData.repository_url}
+                onChange={handleInputChange}
+                placeholder="https://github.com/user/repo.git or git@github.com:user/repo.git"
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Enter the repository URL to track it in your dashboard. No cloning will be performed.
+              </p>
+              {formData.repository_url && !validateUrl(formData.repository_url) && (
+                <p className="mt-2 text-xs text-red-600">
+                  Please enter a valid Git repository URL
+                </p>
+              )}
+            </div>
 
-
-          <div className="form-actions">
-            <button 
-              type="button" 
-              className="cancel-button"
-              onClick={() => navigate("/repositories")}
-              disabled={loading}
-            >
-              Cancel
-            </button>
-            <button 
-              type="submit" 
-              className="submit-button"
-              disabled={loading || !isFormValid}
-            >
-              {loading ? "Adding..." : "Add Repository"}
-            </button>
-          </div>
-        </form>
-
-        <div className="repository-preview">
-          <h3>Preview</h3>
-          <div className="preview-card">
-            {formData.repository_url ? (
-              <>
-                <div className="preview-header">
-                  <span className="preview-icon">📂</span>
-                  <span className="preview-name">{extractRepoName(formData.repository_url)}</span>
-                </div>
-                <div className="preview-details">
-                  <div className="preview-detail">
-                    <strong>Full Name:</strong> {extractFullName(formData.repository_url)}
+            {/* Preview Section */}
+            {formData.repository_url && validateUrl(formData.repository_url) && (
+              <div className="border-t border-gray-300 pt-6">
+                <h3 className="text-sm font-medium text-gray-900 mb-3">Preview</h3>
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="text-lg">📂</span>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900">{extractRepoName(formData.repository_url)}</h4>
+                      <p className="text-xs text-gray-500">{extractFullName(formData.repository_url)}</p>
+                    </div>
                   </div>
-                  <div className="preview-detail">
-                    <strong>Provider:</strong> {providers.find(p => p.id === formData.provider_id)?.name || "Not selected"}
-                  </div>
-                  <div className="preview-detail">
-                    <strong>Repository URL:</strong> {formData.repository_url}
-                  </div>
-                  <div className="preview-detail">
-                    <strong>Web URL:</strong> {convertToWebUrl(formData.repository_url)}
+                  <div className="space-y-1 text-xs text-gray-600">
+                    <div><span className="font-medium">Provider:</span> {providers.find(p => p.id === formData.provider_id)?.name || "Not selected"}</div>
+                    <div><span className="font-medium">Repository URL:</span> {formData.repository_url}</div>
+                    <div><span className="font-medium">Web URL:</span> {convertToWebUrl(formData.repository_url)}</div>
                   </div>
                 </div>
-              </>
-            ) : (
-              <div className="preview-empty">
-                <span className="preview-icon">📂</span>
-                <span className="preview-text">Enter repository URL to see preview</span>
               </div>
             )}
-          </div>
+
+            <div className="flex justify-between pt-6 border-t border-gray-300">
+              <button 
+                type="button" 
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                onClick={() => navigate("/repositories")}
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loading || !isFormValid}
+              >
+                {loading ? "Adding..." : "Add Repository"}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

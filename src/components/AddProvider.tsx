@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import "./AddProvider.css";
 
 interface GitProvider {
   id: string;
@@ -69,120 +68,105 @@ const AddProvider = () => {
   };
 
   return (
-    <div className="add-provider-page">
-      <div className="add-provider-header">
-        <button 
-          className="back-button"
-          onClick={() => navigate("/providers")}
-        >
-          ← Back to Providers
-        </button>
-        <h1>Add New Provider</h1>
+    <div className="flex flex-col h-full p-6">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-gray-900">Add New Provider</h1>
       </div>
 
-      <div className="add-provider-form-container">
-        <form onSubmit={handleSubmit} className="add-provider-form">
-          <div className="form-group">
-            <label htmlFor="provider_type">Provider Type</label>
-            <select
-              id="provider_type"
-              name="provider_type"
-              value={formData.provider_type}
-              onChange={handleInputChange}
-              className="form-input"
-              required
-            >
-              <option value="github">🐙 GitHub</option>
-              <option value="gitlab">🦊 GitLab</option>
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="name">Display Name</label>
-            <input
-              type="text"
-              id="name"
-              name="name"
-              value={formData.name}
-              onChange={handleInputChange}
-              placeholder="e.g., GitHub Enterprise, GitLab Self-hosted"
-              className="form-input"
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="base_url">Base URL</label>
-            <input
-              type="url"
-              id="base_url"
-              name="base_url"
-              value={formData.base_url}
-              onChange={handleInputChange}
-              placeholder="https://api.github.com"
-              className="form-input"
-              required
-            />
-            <small className="form-help">
-              For GitHub Enterprise: https://your-domain.com/api/v3<br/>
-              For GitLab self-hosted: https://your-domain.com/api/v4
-            </small>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="token">Access Token (Optional)</label>
-            <input
-              type="password"
-              id="token"
-              name="token"
-              value={formData.token}
-              onChange={handleInputChange}
-              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx or glpat_xxxxxxxxxxxxxxxx"
-              className="form-input"
-            />
-            <small className="form-help">
-              You can add this later. Required for private repositories and higher API limits.
-            </small>
-          </div>
-
-          <div className="form-actions">
-            <button 
-              type="button" 
-              className="cancel-button"
-              onClick={() => navigate("/providers")}
-              disabled={loading}
-            >
-              Cancel
-            </button>
-            <button 
-              type="submit" 
-              className="submit-button"
-              disabled={loading || !formData.name || !formData.base_url}
-            >
-              {loading ? "Creating..." : "Create Provider"}
-            </button>
-          </div>
-        </form>
-
-        <div className="provider-preview">
-          <h3>Preview</h3>
-          <div className="preview-card">
-            <div className="preview-header">
-              <span className="preview-icon">{getProviderIcon(formData.provider_type)}</span>
-              <span className="preview-name">{formData.name || "New Provider"}</span>
+      <div className="flex-1">
+        {/* Form */}
+        <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl">
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div>
+              <label htmlFor="provider_type" className="block text-sm font-medium text-gray-700 mb-2">
+                Provider Type
+              </label>
+              <select
+                id="provider_type"
+                name="provider_type"
+                value={formData.provider_type}
+                onChange={handleInputChange}
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              >
+                <option value="github">🐙 GitHub</option>
+                <option value="gitlab">🦊 GitLab</option>
+              </select>
             </div>
-            <div className="preview-details">
-              <div className="preview-detail">
-                <strong>Type:</strong> {formData.provider_type}
-              </div>
-              <div className="preview-detail">
-                <strong>URL:</strong> {formData.base_url || "Not set"}
-              </div>
-              <div className="preview-detail">
-                <strong>Token:</strong> {formData.token ? "Set" : "Not set"}
-              </div>
+
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                Display Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleInputChange}
+                placeholder="e.g., GitHub Enterprise, GitLab Self-hosted"
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
             </div>
-          </div>
+
+            <div>
+              <label htmlFor="base_url" className="block text-sm font-medium text-gray-700 mb-2">
+                Base URL
+              </label>
+              <input
+                type="url"
+                id="base_url"
+                name="base_url"
+                value={formData.base_url}
+                onChange={handleInputChange}
+                placeholder="https://api.github.com"
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                For GitHub Enterprise: https://your-domain.com/api/v3<br/>
+                For GitLab self-hosted: https://your-domain.com/api/v4
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="token" className="block text-sm font-medium text-gray-700 mb-2">
+                Access Token (Optional)
+              </label>
+              <input
+                type="password"
+                id="token"
+                name="token"
+                value={formData.token}
+                onChange={handleInputChange}
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxx or glpat_xxxxxxxxxxxxxxxx"
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                You can add this later. Required for private repositories and higher API limits.
+              </p>
+            </div>
+
+            <div className="flex justify-between pt-4 border-t border-gray-200">
+              <button 
+                type="button" 
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                onClick={() => navigate("/providers")}
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loading || !formData.name || !formData.base_url}
+              >
+                {loading ? "Creating..." : "Create Provider"}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
