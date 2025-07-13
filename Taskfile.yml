@@ -46,3 +46,9 @@ tasks:
         echo "Dockerfile にのみ存在:"
         comm -13 "$RENOVATE_TEMP" "$DOCKERFILE_TEMP"
     silent: true
+
+  test_backend:
+    dir: "{{ .TASKFILE_DIR }}/src-tauri"
+    cmds:
+      - cargo test
+    silent: true

@@ -1,14 +1,6 @@
 #[allow(non_snake_case)]
 pub mod database;
 
-#[cfg(test)]
-mod simple_test;
-
-#[cfg(test)]
-mod migration_test;
-
-#[cfg(feature = "test-only")]
-pub mod minimal_test;
 
 pub use database::{
     Database, GitProvider, Repository, Issue, PullRequest, WorkflowRun, SyncHistory,
