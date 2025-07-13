@@ -56,7 +56,7 @@
 | カラム | 型 | 説明 |
 |--------|------|-------------|
 | id | INTEGER PRIMARY KEY AUTOINCREMENT | 一意な識別子 |
-| code | TEXT NOT NULL UNIQUE | ステータスコード ('success', 'failure', 'in_progress', 'cancelled') |
+| code | TEXT NOT NULL UNIQUE | ステータスコード ('queued', 'in_progress', 'completed', 'cancelled', 'requested', 'waiting') |
 | name | TEXT NOT NULL | 表示名 |
 | description | TEXT | ステータスの説明 |
 
@@ -85,8 +85,6 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
 | base_url | TEXT NOT NULL | API ベース URL | https://api.github.com | https://gitlab.com/api/v4 |
 | token | TEXT | API 認証トークン | - | - |
 | token_valid | BOOLEAN DEFAULT FALSE | トークンの有効性ステータス | - | - |
-| last_sync | TIMESTAMP | 最終同期タイムスタンプ | - | - |
-| last_sync_status_id | INTEGER | 最終同期ステータス（sync_statuses への外部キー） | - | - |
 
 ### repositories
 リポジトリ情報を保存します。
@@ -107,6 +105,12 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
 | is_private | BOOLEAN NOT NULL DEFAULT FALSE | プライベートリポジトリフラグ | `private` | `visibility` != 'public' |
 | language | TEXT | 主要プログラミング言語 | `language` | - |
 | last_activity | TIMESTAMP | 最終アクティビティタイムスタンプ | `pushed_at` | `last_activity_at` |
+| last_issues_sync | TIMESTAMP | Issues最終同期タイムスタンプ | - | - |
+| last_pull_requests_sync | TIMESTAMP | Pull Requests最終同期タイムスタンプ | - | - |
+| last_workflows_sync | TIMESTAMP | Workflows最終同期タイムスタンプ | - | - |
+| last_issues_sync_status_id | INTEGER | Issues最終同期ステータス（sync_statuses への外部キー） | - | - |
+| last_pull_requests_sync_status_id | INTEGER | Pull Requests最終同期ステータス（sync_statuses への外部キー） | - | - |
+| last_workflows_sync_status_id | INTEGER | Workflows最終同期ステータス（sync_statuses への外部キー） | - | - |
 
 ### issues
 イシュー情報を保存します。
@@ -168,6 +172,26 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
 | name | TEXT NOT NULL | ワークフロー名 | `name` | `name` |
 | url | TEXT NOT NULL | ワークフロー Web URL | `html_url` | `web_url` |
 
+### sync_history
+同期実行履歴を詳細に記録します。
+
+| カラム | 型 | 説明 |
+|--------|------|-------------|
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 一意な同期履歴識別子 |
+| created_at | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | レコード作成タイムスタンプ(管理用カラム) |
+| updated_at | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | レコード更新タイムスタンプ(管理用カラム) |
+| sync_type | TEXT NOT NULL | 同期タイプ ('provider', 'all_providers', 'repository') |
+| target_id | INTEGER | 対象ID（プロバイダーIDまたはリポジトリID、all_providersの場合はNULL） |
+| target_name | TEXT NOT NULL | 対象名（プロバイダー名、リポジトリ名、または'All Providers'） |
+| status | TEXT NOT NULL | 同期ステータス ('started', 'completed', 'failed') |
+| error_message | TEXT | エラーメッセージ（失敗時の詳細情報） |
+| items_synced | INTEGER DEFAULT 0 | 同期されたアイテム数 |
+| repositories_synced | INTEGER DEFAULT 0 | 同期されたリポジトリ数 |
+| errors_count | INTEGER DEFAULT 0 | 発生したエラー数 |
+| started_at | TIMESTAMP NOT NULL | 同期開始タイムスタンプ |
+| completed_at | TIMESTAMP | 同期完了タイムスタンプ |
+| duration_seconds | INTEGER | 実行時間（秒） |
+
 ## API エンドポイントリファレンス
 
 ### GitHub API
@@ -218,6 +242,15 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
   - `idx_pr_repo_state` ON pull_requests(repository_id, state_id)
   - `idx_issues_assigned_to_me` ON issues(assigned_to_me) WHERE assigned_to_me = TRUE
   - `idx_pr_assigned_to_me` ON pull_requests(assigned_to_me) WHERE assigned_to_me = TRUE
+- 同期履歴専用インデックス：
+  - `idx_sync_history_status` ON sync_history(status)
+  - `idx_sync_history_sync_type` ON sync_history(sync_type)
+  - `idx_sync_history_started_at` ON sync_history(started_at)
+  - `idx_sync_history_target_id` ON sync_history(target_id)
+- リポジトリ同期ステータス専用インデックス：
+  - `idx_repositories_last_issues_sync_status_id` ON repositories(last_issues_sync_status_id)
+  - `idx_repositories_last_pull_requests_sync_status_id` ON repositories(last_pull_requests_sync_status_id)
+  - `idx_repositories_last_workflows_sync_status_id` ON repositories(last_workflows_sync_status_id)
 
 ## 注意事項
 
@@ -250,3 +283,60 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
 6. **プロバイダー固有フィールド**: `language` のような一部のフィールドは GitHub では利用可能ですが GitLab では利用できません（その逆も同様）。
 
 7. **workflow_runs の注意**: GitLab パイプラインには `conclusion` フィールドが存在しないため、`conclusion_id` は NULL になります。これは設計上の想定内です。
+
+8. **リソース別同期管理**:
+   - リポジトリレベルで、Issues/Pull Requests/Workflows の個別同期管理を実装
+   - `last_issues_sync`, `last_pull_requests_sync`, `last_workflows_sync` で各リソースの最終同期時刻を追跡
+   - `last_*_sync_status_id` で各リソースの同期ステータスを個別管理
+   - これにより、一部のリソース同期が失敗しても他のリソース同期に影響しない設計
+
+9. **同期履歴システム**:
+   - `sync_history` テーブルで全ての同期実行を詳細に記録
+   - パフォーマンス指標（実行時間、同期アイテム数、エラー数）を自動収集
+   - 同期タイプ別（プロバイダー、全プロバイダー、リポジトリ）の実行履歴管理
+   - デバッグと運用監視のための包括的なログシステム
+
+10. **初期データ**:
+    - **ルックアップテーブル**: 以下の値がアプリケーション初期化時に自動挿入されます
+      
+      **provider_types**:
+      - (1, 'github', 'GitHub', 'GitHub provider')
+      - (2, 'gitlab', 'GitLab', 'GitLab provider')
+      - (3, 'bitbucket', 'Bitbucket', 'Bitbucket provider')
+      
+      **sync_statuses**:
+      - (1, 'success', 'Success', 'Sync completed successfully')
+      - (2, 'failure', 'Failure', 'Sync failed')
+      - (3, 'in_progress', 'In Progress', 'Sync is currently running')
+      
+      **issue_states**:
+      - (1, 'open', 'Open', 'Issue is open')
+      - (2, 'closed', 'Closed', 'Issue is closed')
+      
+      **pr_states**:
+      - (1, 'open', 'Open', 'Pull request is open')
+      - (2, 'closed', 'Closed', 'Pull request is closed')
+      - (3, 'merged', 'Merged', 'Pull request is merged')
+      
+      **workflow_statuses**:
+      - (1, 'queued', 'Queued', 'Workflow is queued to run')
+      - (2, 'in_progress', 'In Progress', 'Workflow is running')
+      - (3, 'completed', 'Completed', 'Workflow has completed')
+      - (4, 'cancelled', 'Cancelled', 'Workflow was cancelled')
+      - (5, 'requested', 'Requested', 'Workflow run has been requested')
+      - (6, 'waiting', 'Waiting', 'Workflow is waiting for approval')
+      
+      **workflow_conclusions**:
+      - (1, 'success', 'Success', 'All jobs completed successfully')
+      - (2, 'failure', 'Failure', 'One or more jobs failed')
+      - (3, 'cancelled', 'Cancelled', 'Workflow was cancelled')
+      - (4, 'skipped', 'Skipped', 'Workflow was skipped')
+      - (5, 'timed_out', 'Timed Out', 'Workflow exceeded time limit')
+      - (6, 'action_required', 'Action Required', 'Manual action is required')
+      - (7, 'neutral', 'Neutral', 'Neutral result')
+    
+    - **デフォルトプロバイダー**: 以下のプロバイダーレコードが自動作成されます
+      - GitHub.com (id: 1, provider_type_id: 1, base_url: 'https://api.github.com')
+      - GitLab.com (id: 2, provider_type_id: 2, base_url: 'https://gitlab.com/api/v4')
+    
+    - **データベース移行**: V1-V5 移行スクリプトにより段階的にスキーマとデータを構築

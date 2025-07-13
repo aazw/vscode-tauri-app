@@ -827,7 +827,7 @@ impl Database {
 
         // Apply pagination
         let page = pagination.as_ref().map(|p| p.page).unwrap_or(1);
-        let per_page = pagination.as_ref().map(|p| p.per_page).unwrap_or(10);
+        let per_page = pagination.as_ref().map(|p| p.per_page).unwrap_or(20);
         
         // Handle edge cases for per_page
         if per_page == 0 {
@@ -1048,7 +1048,7 @@ impl Database {
         let (page, per_page) = if let Some(p) = pagination {
             (p.page, p.per_page)
         } else {
-            (1, 10)
+            (1, 20)
         };
         
         let offset = (page - 1) * per_page;
@@ -1210,8 +1210,21 @@ impl Database {
         if let Some(f) = filters {
             if let Some(status) = &f.status {
                 if status != "all" {
-                    where_clauses.push("ws.code = ?");
-                    params.push(Box::new(status.clone()));
+                    match status.as_str() {
+                        "in_progress" => {
+                            where_clauses.push("(ws.code = 'in_progress' OR ws.code = 'queued' OR ws.code = 'requested' OR ws.code = 'waiting')");
+                        },
+                        "success" => {
+                            where_clauses.push("(ws.code = 'completed' AND wc.code = 'success')");
+                        },
+                        "failure" => {
+                            where_clauses.push("(ws.code = 'completed' AND (wc.code = 'failure' OR wc.code = 'timed_out'))");
+                        },
+                        "cancelled" => {
+                            where_clauses.push("(ws.code = 'cancelled' OR (ws.code = 'completed' AND wc.code = 'cancelled'))");
+                        },
+                        _ => {} // no filter for unknown statuses
+                    }
                 }
             }
             if let Some(provider) = &f.provider {
@@ -1247,7 +1260,7 @@ impl Database {
         let (page, per_page) = if let Some(p) = pagination {
             (p.page, p.per_page)
         } else {
-            (1, 10)
+            (1, 20)
         };
         
         let offset = (page - 1) * per_page;

@@ -591,7 +591,7 @@ export class MockBackend implements AppBackend {
     }
 
     const page = pagination?.page || 1;
-    const perPage = pagination?.per_page || 10;
+    const perPage = pagination?.per_page || 20;
     const startIndex = (page - 1) * perPage;
     const endIndex = startIndex + perPage;
     const paginatedData = filteredIssues.slice(startIndex, endIndex);
@@ -665,7 +665,7 @@ export class MockBackend implements AppBackend {
     }
 
     const page = pagination?.page || 1;
-    const perPage = pagination?.per_page || 10;
+    const perPage = pagination?.per_page || 20;
     const startIndex = (page - 1) * perPage;
     const endIndex = startIndex + perPage;
     const paginatedData = filteredPRs.slice(startIndex, endIndex);
@@ -712,6 +712,28 @@ export class MockBackend implements AppBackend {
     };
   }
 
+  // Helper function to determine effective status (similar to frontend logic)
+  private getEffectiveStatus(workflow: WorkflowRun): 'success' | 'failure' | 'in_progress' | 'cancelled' {
+    if (workflow.status === 'in_progress' || workflow.status === 'queued' || workflow.status === 'requested' || workflow.status === 'waiting') {
+      return 'in_progress';
+    }
+    if (workflow.status === 'cancelled') {
+      return 'cancelled';
+    }
+    if (workflow.status === 'completed') {
+      if (workflow.conclusion === 'success') {
+        return 'success';
+      } else if (workflow.conclusion === 'failure' || workflow.conclusion === 'timed_out') {
+        return 'failure';
+      } else if (workflow.conclusion === 'cancelled') {
+        return 'cancelled';
+      } else {
+        return 'failure';
+      }
+    }
+    return 'in_progress';
+  }
+
   // Workflow operations
   async getWorkflows(filters?: WorkflowFilters, pagination?: PaginationParams): Promise<PaginatedResponse<WorkflowRun>> {
     await this.delay();
@@ -719,7 +741,7 @@ export class MockBackend implements AppBackend {
 
     if (filters) {
       if (filters.status && filters.status !== 'all') {
-        filteredWorkflows = filteredWorkflows.filter(w => w.status === filters.status);
+        filteredWorkflows = filteredWorkflows.filter(w => this.getEffectiveStatus(w) === filters.status);
       }
       if (filters.provider) {
         filteredWorkflows = filteredWorkflows.filter(w => w.provider === filters.provider);
@@ -736,7 +758,7 @@ export class MockBackend implements AppBackend {
     }
 
     const page = pagination?.page || 1;
-    const perPage = pagination?.per_page || 10;
+    const perPage = pagination?.per_page || 20;
     const startIndex = (page - 1) * perPage;
     const endIndex = startIndex + perPage;
     const paginatedData = filteredWorkflows.slice(startIndex, endIndex);
@@ -774,34 +796,12 @@ export class MockBackend implements AppBackend {
       }
     }
 
-    // Helper function to determine effective status (similar to frontend logic)
-    const getEffectiveStatus = (workflow: WorkflowRun): 'success' | 'failure' | 'in_progress' | 'cancelled' => {
-      if (workflow.status === 'in_progress' || workflow.status === 'queued' || workflow.status === 'requested' || workflow.status === 'waiting') {
-        return 'in_progress';
-      }
-      if (workflow.status === 'cancelled') {
-        return 'cancelled';
-      }
-      if (workflow.status === 'completed') {
-        if (workflow.conclusion === 'success') {
-          return 'success';
-        } else if (workflow.conclusion === 'failure' || workflow.conclusion === 'timed_out') {
-          return 'failure';
-        } else if (workflow.conclusion === 'cancelled') {
-          return 'cancelled';
-        } else {
-          return 'failure';
-        }
-      }
-      return 'in_progress';
-    };
-
     return {
       total: filteredWorkflows.length,
-      success: filteredWorkflows.filter(w => getEffectiveStatus(w) === 'success').length,
-      failure: filteredWorkflows.filter(w => getEffectiveStatus(w) === 'failure').length,
-      in_progress: filteredWorkflows.filter(w => getEffectiveStatus(w) === 'in_progress').length,
-      cancelled: filteredWorkflows.filter(w => getEffectiveStatus(w) === 'cancelled').length
+      success: filteredWorkflows.filter(w => this.getEffectiveStatus(w) === 'success').length,
+      failure: filteredWorkflows.filter(w => this.getEffectiveStatus(w) === 'failure').length,
+      in_progress: filteredWorkflows.filter(w => this.getEffectiveStatus(w) === 'in_progress').length,
+      cancelled: filteredWorkflows.filter(w => this.getEffectiveStatus(w) === 'cancelled').length
     };
   }
 

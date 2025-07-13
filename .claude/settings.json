@@ -1,1 +1,39 @@
-{}
+{
+  "permissions": {
+    "allow": [
+      // common
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(sed:*)",
+      "Bash(sqlite3:*)",
+      // npm
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(timeout 30s npm run tauri dev:*)",
+      //   cargo
+      "Bash(cargo check:*)",
+      "Bash(cargo clean:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo run:*)",
+      "Bash(timeout 10m cargo build)",
+      "Bash(timeout 30s cargo test --lib database --no-default-features --features tauri)",
+      "Bash(RUST_LOG=debug cargo run --bin tauri-app)",
+      // web fetch
+      "WebFetch(domain:tailwindcss.com)",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:docs.gitlab.com)",
+      // mcp
+      "mcp__ide__getDiagnostics"
+    ],
+    "deny": [
+      // common
+      "Bash(curl:*)",
+      "Bash(timeout:*)",
+      // web fetch
+      "WebFetch(domain:*)"
+    ]
+  }
+}

@@ -325,7 +325,7 @@ mod database {
             
             // Apply pagination
             let page = pagination.as_ref().map(|p| p.page).unwrap_or(1);
-            let per_page = pagination.as_ref().map(|p| p.per_page).unwrap_or(10);
+            let per_page = pagination.as_ref().map(|p| p.per_page).unwrap_or(20);
             let total = issues.len() as u32;
             let total_pages = (total + per_page - 1) / per_page;
             

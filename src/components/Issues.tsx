@@ -1,50 +1,151 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useBackend } from "../backends/BackendProvider";
-import { Issue } from "../types/AppBackend";
+import { Issue, IssueFilters, PaginationParams } from "../types/AppBackend";
 import { getRelativeTime } from "../utils/timeHelper";
 
 const Issues = () => {
   const [allIssues, setAllIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issueFilter, setIssueFilter] = useState<"open" | "all" | "assigned">("open");
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [repositoryFilter, setRepositoryFilter] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   
   const backend = useBackend();
 
-  useEffect(() => {
-    const loadIssues = async () => {
-      try {
+  const buildFilters = useCallback((): IssueFilters => {
+    const filters: IssueFilters = {};
+    
+    if (issueFilter === "open") {
+      filters.state = "open";
+    } else if (issueFilter === "assigned") {
+      filters.assigned = "me";
+    }
+    
+    if (providerFilter !== "all") {
+      filters.provider = providerFilter;
+    }
+    
+    if (repositoryFilter !== "all") {
+      filters.repository = repositoryFilter;
+    }
+    
+    if (searchQuery.trim()) {
+      filters.search = searchQuery.trim();
+    }
+    
+    return filters;
+  }, [issueFilter, providerFilter, repositoryFilter, searchQuery]);
+
+  const loadIssues = useCallback(async (page: number = 1, append: boolean = false) => {
+    try {
+      if (page === 1) {
         setLoading(true);
-        setError(null);
-        const response = await backend.getIssues();
+      } else {
+        setLoadingMore(true);
+      }
+      setError(null);
+      
+      const filters = buildFilters();
+      const pagination: PaginationParams = { page, per_page: 20 };
+      
+      const response = await backend.getIssues(filters, pagination);
+      
+      if (append && page > 1) {
+        setAllIssues(prev => [...prev, ...response.data]);
+      } else {
         setAllIssues(response.data);
-      } catch (err) {
-        setError("Failed to load issues");
-        console.error("Error loading issues:", err);
-      } finally {
-        setLoading(false);
+      }
+      
+      setTotalCount(response.pagination.total);
+      setHasMore(page < response.pagination.total_pages);
+      
+    } catch (err) {
+      setError("Failed to load issues");
+      console.error("Error loading issues:", err);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [backend, buildFilters]);
+
+  const loadMore = useCallback(() => {
+    if (!loadingMore && hasMore) {
+      const nextPage = currentPage + 1;
+      setCurrentPage(nextPage);
+      loadIssues(nextPage, true);
+    }
+  }, [currentPage, hasMore, loadingMore, loadIssues]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+    loadIssues(1, false);
+  }, [loadIssues]);
+
+  // IntersectionObserver setup function
+  const setupIntersectionObserver = useCallback(() => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+
+    if (loadMoreRef.current && hasMore) {
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            loadMore();
+          }
+        },
+        { threshold: 0.1 }
+      );
+      
+      observerRef.current.observe(loadMoreRef.current);
+    }
+  }, [hasMore, loadMore]);
+
+  // Setup observer when hasMore or loadMore changes
+  useEffect(() => {
+    setupIntersectionObserver();
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
       }
     };
+  }, [setupIntersectionObserver]);
 
-    loadIssues();
-  }, [backend]);
+  // Setup observer again after DOM updates
+  useEffect(() => {
+    if (hasMore && allIssues.length > 0) {
+      const timeoutId = setTimeout(() => {
+        setupIntersectionObserver();
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [hasMore, allIssues.length, setupIntersectionObserver]);
 
-  const filteredIssues = allIssues.filter(issue => {
-    // Status filter
-    if (issueFilter === "open" && issue.state !== "open") return false;
-    if (issueFilter === "assigned" && !issue.assigned_to_me) return false;
-    
-    // Provider filter
-    if (providerFilter !== "all" && issue.provider !== providerFilter) return false;
-    
-    // Repository filter
-    if (repositoryFilter !== "all" && issue.repository !== repositoryFilter) return false;
-    
-    return true;
-  }).sort((a, b) => new Date(b.api_created_at || 0).getTime() - new Date(a.api_created_at || 0).getTime());
+  const handleFilterChange = (type: 'issue' | 'provider' | 'repository', value: string) => {
+    if (type === 'issue') {
+      setIssueFilter(value as "open" | "all" | "assigned");
+    } else if (type === 'provider') {
+      setProviderFilter(value);
+    } else if (type === 'repository') {
+      setRepositoryFilter(value);
+    }
+    setCurrentPage(1);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+  };
 
   // Get unique providers
   const providers = [...new Set(allIssues.map(issue => issue.provider))].sort();
@@ -86,6 +187,8 @@ const Issues = () => {
           <input
             type="text"
             placeholder="Search issues..."
+            value={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
@@ -100,21 +203,15 @@ const Issues = () => {
           </button>
           <div className="flex flex-wrap gap-2">
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Open</span>
-              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {allIssues.filter(i => i.state === "open").length}
-              </span>
-            </div>
-            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Closed</span>
-              <span className="px-2 py-1 bg-red-500 text-white font-semibold">
-                {allIssues.filter(i => i.state === "closed").length}
-              </span>
-            </div>
-            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Assigned</span>
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Total</span>
               <span className="px-2 py-1 bg-blue-500 text-white font-semibold">
-                {allIssues.filter(i => i.assigned_to_me).length}
+                {totalCount}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
+              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+                {allIssues.length}
               </span>
             </div>
           </div>
@@ -126,7 +223,7 @@ const Issues = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <select 
                 value={issueFilter} 
-                onChange={(e) => setIssueFilter(e.target.value as "open" | "all" | "assigned")}
+                onChange={(e) => handleFilterChange('issue', e.target.value)}
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 <option value="open">Open Issues</option>
@@ -135,7 +232,7 @@ const Issues = () => {
               </select>
               <select 
                 value={providerFilter} 
-                onChange={(e) => setProviderFilter(e.target.value)}
+                onChange={(e) => handleFilterChange('provider', e.target.value)}
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 <option value="all">All Providers</option>
@@ -145,7 +242,7 @@ const Issues = () => {
               </select>
               <select 
                 value={repositoryFilter} 
-                onChange={(e) => setRepositoryFilter(e.target.value)}
+                onChange={(e) => handleFilterChange('repository', e.target.value)}
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 <option value="all">All Repositories</option>
@@ -161,11 +258,11 @@ const Issues = () => {
       {/* Issue List */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-6">
         <div className="bg-white border-t border-b border-gray-300">
-          {filteredIssues.map((issue, index) => (
+          {allIssues.map((issue, index) => (
             <div 
               key={issue.id} 
               className={`p-2 hover:bg-gray-50 transition-colors cursor-pointer ${
-                index !== filteredIssues.length - 1 ? 'border-b border-gray-300' : ''
+                index !== allIssues.length - 1 ? 'border-b border-gray-300' : ''
               }`}
               onClick={() => backend.openExternalUrl(issue.url)} 
               role="button" 
@@ -197,9 +294,36 @@ const Issues = () => {
             </div>
           ))}
           
+          {/* Infinite scroll trigger */}
+          {hasMore && (
+            <div 
+              ref={(element) => {
+                loadMoreRef.current = element;
+                if (element) {
+                  setTimeout(() => setupIntersectionObserver(), 0);
+                }
+              }}
+              className="p-4 text-center text-gray-500"
+            >
+              {loadingMore ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                  <span>Loading more issues...</span>
+                </div>
+              ) : (
+                <span>Scroll to load more</span>
+              )}
+            </div>
+          )}
+          
+          {!hasMore && allIssues.length > 0 && (
+            <div className="p-4 text-center text-gray-500">
+              <span>All issues loaded ({allIssues.length} of {totalCount})</span>
+            </div>
+          )}
         </div>
 
-        {filteredIssues.length === 0 && (
+        {allIssues.length === 0 && !loading && (
           <div className="text-center py-12">
             <h3 className="text-lg font-medium text-gray-900 mb-2">No issues found</h3>
             <p className="text-gray-600">No issues available.</p>
