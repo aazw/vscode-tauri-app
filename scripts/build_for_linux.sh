@@ -8,9 +8,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PROJECT_ROOT=${SCRIPT_DIR}/..
 cd ${PROJECT_ROOT}
 
-# macOSかどうかを確認
-if [[ "$(uname)" != "Darwin" ]]; then
-	echo "Error: This script is only for macOS"
+# linuxかどうかを確認
+if [[ "$(uname)" != "Linux" ]]; then
+	echo "Error: This script is only for linux"
 	exit 1
 fi
 
@@ -23,6 +23,6 @@ cd ${PROJECT_ROOT}
 rm -rf node_modules/*
 npm install
 
-# macOS向けにビルド
+# linux向けにビルド
 cd ${PROJECT_ROOT}
-npm run tauri build --debug -- --debug --target aarch64-apple-darwin --no-bundle
+npm run tauri build --debug -- --debug --target aarch64-unknown-linux-gnu -- -j 1

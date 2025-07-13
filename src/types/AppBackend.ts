@@ -1,84 +1,97 @@
 export interface GitProvider {
-  id: string;
+  id: number;
   name: string;
   provider_type: string;
   base_url: string;
   token: string | null;
+  token_valid: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export interface Repository {
-  id: string;
-  provider_id: string;
+  id: number;
+  api_id: string;
   name: string;
   full_name: string;
-  clone_url: string;
-  ssh_url: string;
   web_url: string;
   description: string | null;
+  provider_id: number;
   provider_name: string;
   provider_type: string;
   is_private: boolean;
-  is_fork: boolean;
-  is_archived: boolean;
-  default_branch: string;
   language: string | null;
-  stars_count: number;
-  forks_count: number;
-  issues_count: number;
   last_activity: string | null;
+  api_created_at: string | null;
+  api_updated_at: string | null;
+  
+  // Resource-specific sync timestamps
+  last_issues_sync: string | null;
+  last_pull_requests_sync: string | null;
+  last_workflows_sync: string | null;
+  
+  // Resource-specific sync status
+  last_issues_sync_status: 'success' | 'failure' | 'in_progress' | null;
+  last_pull_requests_sync_status: 'success' | 'failure' | 'in_progress' | null;
+  last_workflows_sync_status: 'success' | 'failure' | 'in_progress' | null;
+  
   created_at: string;
   updated_at: string;
 }
 
 export interface Issue {
-  id: string;
-  repository_id: string;
+  id: number;
+  api_id: string;
+  repository_id: number;
   number: number;
   title: string;
-  body: string | null;
   repository: string;
   provider: string;
-  assignee: string | null;
+  assigned_to_me: boolean;
   author: string;
   state: 'open' | 'closed';
   labels: string[];
   url: string;
+  closed_at: string | null;
+  api_created_at: string | null;
+  api_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface PullRequest {
-  id: string;
-  repository_id: string;
+  id: number;
+  api_id: string;
+  repository_id: number;
   number: number;
   title: string;
-  body: string | null;
   repository: string;
   provider: string;
-  assignee: string | null;
+  assigned_to_me: boolean;
   author: string;
   state: 'open' | 'closed' | 'merged';
   draft: boolean;
   url: string;
+  merged_at: string | null;
+  closed_at: string | null;
+  api_created_at: string | null;
+  api_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface WorkflowRun {
-  id: string;
-  repository_id: string;
+  id: number;
+  api_id: string;
+  repository_id: number;
   name: string;
   repository: string;
   provider: string;
-  status: 'success' | 'failure' | 'in_progress' | 'cancelled';
+  status: 'queued' | 'in_progress' | 'completed' | 'cancelled' | 'requested' | 'waiting';
   conclusion: string | null;
-  branch: string;
-  commit_sha: string;
-  commit_message: string;
-  author: string;
   url: string;
+  api_created_at: string | null;
+  api_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -152,41 +165,77 @@ export interface CreateProviderRequest {
 }
 
 export interface CreateRepositoryRequest {
-  provider_id: string;
-  repository_url: string;
+  provider_id: number;
+  web_url: string;
+}
+
+export interface SyncSettings {
+  sync_interval_minutes: number;
+  auto_sync_enabled: boolean;
+}
+
+export interface SyncHistory {
+  id: number;
+  sync_type: string; // 'provider', 'all_providers', 'repository'
+  target_id: number | null;
+  target_name: string;
+  status: string; // 'started', 'completed', 'failed'
+  error_message: string | null;
+  items_synced: number;
+  repositories_synced: number;
+  errors_count: number;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AppBackend {
   // Provider operations
   getProviders(): Promise<GitProvider[]>;
-  getProvider(providerId: string): Promise<GitProvider>;
-  addProvider(provider: CreateProviderRequest): Promise<string>;
-  updateProviderToken(providerId: string, token: string | null): Promise<void>;
-  deleteProvider(providerId: string): Promise<void>;
+  getProvider(providerId: number): Promise<GitProvider>;
+  addProvider(provider: CreateProviderRequest): Promise<number>;
+  updateProviderToken(providerId: number, token: string | null): Promise<void>;
+  validateProviderToken(providerId: number): Promise<boolean>;
+  deleteProvider(providerId: number): Promise<void>;
 
   // Repository operations
-  getRepositories(providerId?: string): Promise<Repository[]>;
-  getRepository(repositoryId: string): Promise<Repository>;
-  addRepository(repository: CreateRepositoryRequest): Promise<string>;
-  deleteRepository(repositoryId: string): Promise<void>;
+  getRepositories(providerId?: number): Promise<Repository[]>;
+  getRepository(repositoryId: number): Promise<Repository>;
+  addRepository(repository: CreateRepositoryRequest): Promise<number>;
+  deleteRepository(repositoryId: number): Promise<void>;
 
   // Issue operations
   getIssues(filters?: IssueFilters, pagination?: PaginationParams): Promise<PaginatedResponse<Issue>>;
-  getIssue(issueId: string): Promise<Issue>;
+  getIssue(issueId: number): Promise<Issue>;
   getIssueStats(filters?: IssueFilters): Promise<IssueStats>;
 
   // Pull Request operations
   getPullRequests(filters?: PullRequestFilters, pagination?: PaginationParams): Promise<PaginatedResponse<PullRequest>>;
-  getPullRequest(prId: string): Promise<PullRequest>;
+  getPullRequest(prId: number): Promise<PullRequest>;
   getPullRequestStats(filters?: PullRequestFilters): Promise<PullRequestStats>;
 
   // Workflow operations
   getWorkflows(filters?: WorkflowFilters, pagination?: PaginationParams): Promise<PaginatedResponse<WorkflowRun>>;
-  getWorkflow(workflowId: string): Promise<WorkflowRun>;
+  getWorkflow(workflowId: number): Promise<WorkflowRun>;
   getWorkflowStats(filters?: WorkflowFilters): Promise<WorkflowStats>;
 
   // Sync operations
-  syncProvider(providerId: string): Promise<void>;
+  syncProvider(providerId: number): Promise<void>;
   syncAllProviders(): Promise<void>;
-  syncRepository(repositoryId: string): Promise<void>;
+  syncRepository(repositoryId: number): Promise<void>;
+  isSyncInProgress(): Promise<boolean>;
+  getSyncStatus(): Promise<boolean>;
+  resetSyncLock(): Promise<void>;
+  
+  // Settings operations
+  getSyncSettings(): Promise<SyncSettings>;
+  updateSyncSettings(settings: SyncSettings): Promise<void>;
+  
+  // History operations
+  getSyncHistory(limit?: number): Promise<SyncHistory[]>;
+  
+  // External operations
+  openExternalUrl(url: string): Promise<void>;
 }

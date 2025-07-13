@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBackend } from "../backends/BackendProvider";
-import { GitProvider, Repository } from "../types/AppBackend";
+import { GitProvider } from "../types/AppBackend";
 
 
 const AddRepository = () => {
@@ -29,37 +29,30 @@ const AddRepository = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('🚀 Add Repository button clicked');
+    console.log('Form data:', formData);
+    console.log('Is form valid:', isFormValid);
+    
     setLoading(true);
 
     try {
-      const selectedProvider = providers.find(p => p.id === formData.provider_id);
       
-      const newRepository: Omit<Repository, 'id' | 'created_at' | 'updated_at'> = {
-        name: extractRepoName(formData.repository_url),
-        full_name: extractFullName(formData.repository_url),
-        description: "Newly added repository",
-        provider_id: formData.provider_id,
-        provider_name: selectedProvider?.name || "Unknown",
-        provider_type: selectedProvider?.provider_type || "github",
-        clone_url: formData.repository_url,
-        ssh_url: convertToSshUrl(formData.repository_url),
+      const newRepository = {
+        provider_id: parseInt(formData.provider_id),
         web_url: convertToWebUrl(formData.repository_url),
-        is_private: false,
-        is_fork: false,
-        is_archived: false,
-        default_branch: "main",
-        language: null,
-        stars_count: 0,
-        forks_count: 0,
-        issues_count: 0,
-        last_activity: new Date().toISOString(),
       };
-
+      
+      console.log('📤 Sending repository data to backend:', newRepository);
       const repositoryId = await backend.addRepository(newRepository);
-      console.log("Created new repository with ID:", repositoryId);
+      console.log("✅ Created new repository with ID:", repositoryId);
       navigate("/repositories");
     } catch (error) {
-      console.error('Failed to add repository:', error);
+      console.error('❌ Failed to add repository:', error);
+      console.error('Error details:', {
+        name: error instanceof Error ? error.name : 'Unknown',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : 'No stack trace'
+      });
       alert('Failed to add repository. Please try again.');
     } finally {
       setLoading(false);
@@ -84,10 +77,6 @@ const AddRepository = () => {
     return match ? match[1].replace('.git', '') : 'unknown/repo';
   };
 
-  const convertToSshUrl = (url: string): string => {
-    if (url.startsWith('git@')) return url;
-    return url.replace(/https:\/\/([^\/]+)\//, 'git@$1:');
-  };
 
   const convertToWebUrl = (url: string): string => {
     if (url.startsWith('http')) return url.replace('.git', '');
@@ -120,9 +109,9 @@ const AddRepository = () => {
         <p className="text-gray-600 mt-1">Track a repository in your dashboard</p>
       </div>
 
-      <div className="flex-1">
+      <div className="flex-1 overflow-auto">
         {/* Form */}
-        <div className="bg-white border-t border-b border-gray-300 max-w-2xl">
+        <div className="bg-white border-t border-b border-gray-300 max-w-2xl m-6">
           <form onSubmit={handleSubmit} className="p-6 space-y-6">
             <div>
               <label htmlFor="provider_id" className="block text-sm font-medium text-gray-700 mb-2">
@@ -182,7 +171,7 @@ const AddRepository = () => {
                     </div>
                   </div>
                   <div className="space-y-1 text-xs text-gray-600">
-                    <div><span className="font-medium">Provider:</span> {providers.find(p => p.id === formData.provider_id)?.name || "Not selected"}</div>
+                    <div><span className="font-medium">Provider:</span> {providers.find(p => p.id.toString() === formData.provider_id)?.name || "Not selected"}</div>
                     <div><span className="font-medium">Repository URL:</span> {formData.repository_url}</div>
                     <div><span className="font-medium">Web URL:</span> {convertToWebUrl(formData.repository_url)}</div>
                   </div>

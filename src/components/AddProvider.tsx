@@ -1,18 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-
-interface GitProvider {
-  id: string;
-  name: string;
-  provider_type: string;
-  base_url: string;
-  token: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import { useBackend } from "../backends/BackendProvider";
 
 const AddProvider = () => {
   const navigate = useNavigate();
+  const backend = useBackend();
   const [formData, setFormData] = useState({
     name: "",
     provider_type: "github",
@@ -20,27 +12,34 @@ const AddProvider = () => {
     token: "",
   });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
 
-    // Mock API call
-    setTimeout(() => {
-      const newProvider: GitProvider = {
-        id: `${formData.provider_type}-${Date.now()}`,
+    try {
+      // Check if this is a standard provider (github.com/gitlab.com) or self-hosted
+      const isStandardProvider = 
+        (formData.provider_type === "github" && formData.base_url === "https://api.github.com") ||
+        (formData.provider_type === "gitlab" && formData.base_url === "https://gitlab.com/api/v4");
+
+      const providerId = await backend.addProvider({
         name: formData.name,
         provider_type: formData.provider_type,
         base_url: formData.base_url,
         token: formData.token || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      });
 
-      console.log("Created new provider:", newProvider);
-      setLoading(false);
+      console.log(isStandardProvider ? "Updated/created standard provider with ID:" : "Created new self-hosted provider with ID:", providerId);
       navigate("/providers");
-    }, 1000);
+    } catch (err) {
+      console.error("Failed to create/update provider:", err);
+      setError(err instanceof Error ? err.message : "Failed to create/update provider");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -63,18 +62,34 @@ const AddProvider = () => {
     }
   };
 
-  const getProviderIcon = (type: string) => {
-    return type === "github" ? "🐙" : "🦊";
-  };
 
   return (
-    <div className="flex flex-col h-full p-6">
+    <div className="flex flex-col min-h-full p-6 overflow-y-auto">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Add New Provider</h1>
       </div>
 
       <div className="flex-1">
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg shadow-sm">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800">Error</h3>
+                <div className="mt-2 text-sm text-red-700">
+                  {error}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Form */}
         <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl">
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -163,7 +178,7 @@ const AddProvider = () => {
                 className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading || !formData.name || !formData.base_url}
               >
-                {loading ? "Creating..." : "Create Provider"}
+                {loading ? "Processing..." : "Add Provider"}
               </button>
             </div>
           </form>

@@ -1,6 +1,48 @@
 # Git Portal - Backend Implementation TODO
 
-このファイルは、現在のフロントエンドデザインに基づいて実装すべきバックエンド機能の一覧です。
+このファイルは、AppBackendインターフェースに基づいて実装すべきバックエンド機能の詳細タスク一覧です。
+
+## 🔴 高優先度（MVP必須）
+
+### Core Backend Types & Interfaces
+- [x] **AppBackend型定義** - GitProvider, Repository, Issue, PullRequest, WorkflowRun interfaces
+
+### Provider Management
+- [ ] **Provider CRUD API** - getProviders, getProvider, addProvider, updateProviderToken, deleteProvider
+- [ ] **Provider Validation** - Token validation, URL connection tests, provider type validation  
+- [ ] **GitHub API Integration** - REST API client for providers, repositories, issues, PRs, workflows
+
+### Repository Management  
+- [ ] **Repository CRUD API** - getRepositories, getRepository, addRepository, deleteRepository
+- [ ] **Repository URL Parsing** - GitHub/GitLab URL validation and metadata extraction
+
+### Sync Operations
+- [ ] **Sync Operations** - syncProvider, syncAllProviders, syncRepository implementations
+
+### Database & Infrastructure
+- [ ] **Database Schema** - Tables for providers, repositories, issues, pull_requests, workflow_runs
+- [ ] **Dashboard Statistics** - Aggregate stats for issues, PRs, workflows across all repositories
+
+## 🟡 中優先度（早期実装）
+
+### Data APIs
+- [ ] **Issue API** - getIssues, getIssue, getIssueStats with filtering and pagination
+- [ ] **Pull Request API** - getPullRequests, getPullRequest, getPullRequestStats with filtering and pagination  
+- [ ] **Workflow API** - getWorkflows, getWorkflow, getWorkflowStats with filtering and pagination
+
+### System Features
+- [ ] **Pagination System** - PaginationParams and PaginatedResponse implementation
+- [ ] **Filter System** - IssueFilters, PullRequestFilters, WorkflowFilters implementation
+- [ ] **Error Handling** - API error responses, network failures, validation errors
+- [ ] **Rate Limiting** - GitHub/GitLab API rate limit management and retry logic
+- [ ] **GitLab API Integration** - REST API client for providers, repositories, issues, PRs, workflows
+
+## 🟢 低優先度（将来的実装）
+
+### Advanced Features  
+- [ ] **Search Functionality** - Text search across issues, PRs, repositories with filters
+
+---
 
 ## 🏠 Dashboard（ダッシュボード）
 

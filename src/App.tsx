@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import Providers from "./components/Providers";
 import AddProvider from "./components/AddProvider";
@@ -8,14 +8,19 @@ import Repositories from "./components/Repositories";
 import Issues from "./components/Issues";
 import PullRequests from "./components/PullRequests";
 import Workflows from "./components/Workflows";
+import History from "./components/History";
 import Settings from "./components/Settings";
 import { BackendProvider, useBackend } from "./backends/BackendProvider";
-import { DashboardStats } from "./types/AppBackend";
+import { IssueStats, PullRequestStats, WorkflowStats } from "./types/AppBackend";
 
 function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [stats, setStats] = useState<DashboardStats>({
+  const [stats, setStats] = useState<{
+    issues: IssueStats;
+    pullRequests: PullRequestStats;
+    workflows: WorkflowStats;
+  }>({
     issues: { total: 0, open: 0, closed: 0, assigned: 0 },
     pullRequests: { total: 0, open: 0, merged: 0, closed: 0, assigned: 0 },
     workflows: { total: 0, success: 0, failure: 0, in_progress: 0, cancelled: 0 }
@@ -24,22 +29,30 @@ function AppContent() {
   const navigate = useNavigate();
   const backend = useBackend();
 
-  useEffect(() => {
-    const loadStats = async () => {
-      try {
-        const dashboardStats = await backend.getDashboardStats();
-        setStats(dashboardStats);
-      } catch (err) {
-        console.error("Error loading dashboard stats:", err);
-      }
-    };
+  const loadStats = useCallback(async () => {
+    try {
+      const [issueStats, prStats, workflowStats] = await Promise.all([
+        backend.getIssueStats(),
+        backend.getPullRequestStats(),
+        backend.getWorkflowStats()
+      ]);
+      setStats({
+        issues: issueStats,
+        pullRequests: prStats,
+        workflows: workflowStats
+      });
+    } catch (err) {
+      console.error("Error loading dashboard stats:", err);
+    }
+  }, [backend]);
 
+  useEffect(() => {
     loadStats();
     const interval = setInterval(loadStats, 30000); // Refresh every 30 seconds
     return () => clearInterval(interval);
-  }, [backend]);
+  }, [backend, loadStats]);
 
-  const getCurrentView = () => {
+  const getCurrentView = (): "dashboard" | "repositories" | "providers" | "issues" | "pull_requests" | "workflows" | "history" | "settings" => {
     const path = location.pathname;
     
     if (path.startsWith("/repositories")) {
@@ -58,6 +71,8 @@ function AppContent() {
         return "pull_requests";
       case "/workflows":
         return "workflows";
+      case "/history":
+        return "history";
       case "/settings":
         return "settings";
       default:
@@ -73,19 +88,35 @@ function AppContent() {
   };
 
   const handleSync = async () => {
+    if (syncing) return;
+    
     setSyncing(true);
-    // Mock API call delay
-    setTimeout(() => {
+    try {
+      // Check if sync is already in progress
+      const isSyncInProgress = await backend.isSyncInProgress();
+      if (isSyncInProgress) {
+        console.log("Sync already in progress");
+        return;
+      }
+      
+      // Start sync
+      await backend.syncAllProviders();
+      console.log("✅ Sync completed successfully");
+      
+      // Reload stats to update sidebar badges
+      await loadStats();
+    } catch (error) {
+      console.error("❌ Sync failed:", error);
+    } finally {
       setSyncing(false);
-      console.log("Synced all data");
-    }, 2000);
+    }
   };
 
   return (
     <main className="flex h-screen bg-gray-50">
-      {/* Mobile Header */}
-      <header className="md:hidden fixed top-0 left-0 right-0 bg-slate-800 border-b border-slate-700 z-50" style={{height: '50px'}}>
-        <div className="flex items-center justify-between h-full px-4">
+      {/* Header - visible on all screen sizes */}
+      <header className="fixed top-0 left-0 right-0 bg-slate-800 border-b border-slate-700 z-50" style={{height: '50px'}}>
+        <div className="flex items-center justify-between h-full px-4 md:ml-64">
           <div className="flex items-center gap-3">
             <button 
               className="flex flex-col justify-center w-6 h-6 space-y-1 md:hidden"
@@ -96,14 +127,25 @@ function AppContent() {
               <span className="block w-full h-0.5 bg-white transition-all"></span>
               <span className="block w-full h-0.5 bg-white transition-all"></span>
             </button>
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-white">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">
+                {currentView === "dashboard" && "📊"}
+                {currentView === "repositories" && "📂"}
+                {currentView === "providers" && "⚙️"}
+                {currentView === "issues" && "🐛"}
+                {currentView === "pull_requests" && "🔀"}
+                {currentView === "workflows" && "⚡"}
+                {currentView === "history" && "📊"}
+                {currentView === "settings" && "⚙️"}
+              </span>
+              <span className="text-xl font-bold text-white">
                 {currentView === "dashboard" && "Dashboard"}
                 {currentView === "repositories" && "Repositories"}
                 {currentView === "providers" && "Providers"}
                 {currentView === "issues" && "Issues"}
                 {currentView === "pull_requests" && "Pull Requests"}
                 {currentView === "workflows" && "Workflows"}
+                {currentView === "history" && "History"}
                 {currentView === "settings" && "Settings"}
               </span>
             </div>
@@ -151,29 +193,6 @@ function AppContent() {
         <div className="px-4 border-b border-slate-700 flex items-center justify-between" style={{height: '50px'}}>
           <h1 className="text-lg font-bold text-white">Git Portal</h1>
           <div className="flex items-center gap-3">
-            <div className="text-xs text-slate-300 flex items-center gap-2 hidden md:flex">
-            {currentView === "dashboard" && (
-              <><span>📊</span> Dashboard</>
-            )}
-            {currentView === "repositories" && (
-              <><span>📂</span> Repositories</>
-            )}
-            {currentView === "providers" && (
-              <><span>⚙️</span> Providers</>
-            )}
-            {currentView === "issues" && (
-              <><span>🐛</span> Issues</>
-            )}
-            {currentView === "pull_requests" && (
-              <><span>🔀</span> Pull Requests</>
-            )}
-            {currentView === "workflows" && (
-              <><span>⚡</span> Workflows</>
-            )}
-            {currentView === "settings" && (
-              <><span>⚙️</span> Settings</>
-            )}
-            </div>
             <button
               className="md:hidden p-1 text-slate-300 hover:text-white focus:outline-none"
               onClick={() => setSidebarOpen(false)}
@@ -264,8 +283,19 @@ function AppContent() {
             }`}
             onClick={() => handleMenuClick("providers")}
           >
-            <span className="text-base">⚙️</span>
+            <span className="text-base">🔗</span>
             <span className="text-sm font-medium">Providers</span>
+          </button>
+          <button
+            className={`flex items-center gap-3 w-full px-4 py-3 text-left rounded-lg transition-colors ${
+              currentView === "history" 
+                ? "bg-blue-600 text-white" 
+                : "text-slate-300 hover:bg-slate-700 hover:text-white"
+            }`}
+            onClick={() => handleMenuClick("history")}
+          >
+            <span className="text-base">📊</span>
+            <span className="text-sm font-medium">History</span>
           </button>
           <button
             className={`flex items-center gap-3 w-full px-4 py-3 text-left rounded-lg transition-colors ${
@@ -281,7 +311,7 @@ function AppContent() {
         </nav>
       </aside>
 
-      <div className="flex-1 md:ml-0 md:pt-0 bg-gray-50 flex flex-col" style={{paddingTop: '50px'}}>
+      <div className="flex-1 md:ml-0 bg-gray-50 flex flex-col" style={{paddingTop: '50px'}}>
         <div className="flex-1 flex flex-col overflow-hidden">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -293,6 +323,7 @@ function AppContent() {
             <Route path="/repositories/new" element={<AddRepository />} />
             <Route path="/providers" element={<Providers />} />
             <Route path="/providers/new" element={<AddProvider />} />
+            <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </div>

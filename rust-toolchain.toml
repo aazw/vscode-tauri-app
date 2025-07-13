@@ -1,0 +1,7 @@
+# rust-toolchain.toml
+[toolchain]
+channel = "stable"
+targets = [
+  "aarch64-unknown-linux-gnu", # Dev Container 開発用
+  "aarch64-apple-darwin",      # 最終 macOS 配布用
+]

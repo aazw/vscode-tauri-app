@@ -6,7 +6,18 @@ import {
   Issue, 
   PullRequest,
   WorkflowRun,
-  DashboardStats 
+  IssueStats,
+  PullRequestStats,
+  SyncSettings,
+  SyncHistory,
+  WorkflowStats,
+  PaginationParams,
+  PaginatedResponse,
+  IssueFilters,
+  PullRequestFilters,
+  WorkflowFilters,
+  CreateProviderRequest,
+  CreateRepositoryRequest
 } from '../types/AppBackend';
 
 export class NativeBackend implements AppBackend {
@@ -15,114 +26,161 @@ export class NativeBackend implements AppBackend {
     return await invoke('get_git_providers');
   }
 
-  async addProvider(provider: Omit<GitProvider, 'id' | 'created_at' | 'updated_at'>): Promise<string> {
+  async getProvider(providerId: number): Promise<GitProvider> {
+    return await invoke('get_git_provider', { providerId: providerId });
+  }
+
+  async addProvider(provider: CreateProviderRequest): Promise<number> {
     return await invoke('add_git_provider', {
       name: provider.name,
-      providerType: provider.provider_type,
-      baseUrl: provider.base_url,
+      provider_type: provider.provider_type,
+      base_url: provider.base_url,
       token: provider.token
     });
   }
 
-  async updateProviderToken(providerId: string, token: string | null): Promise<void> {
-    await invoke('update_provider_token', {
-      providerId,
-      token
+  async updateProviderToken(providerId: number, token: string | null): Promise<void> {
+    console.log(`🔧 NativeBackend.updateProviderToken called with: providerId=${providerId}, hasToken=${!!token}`);
+    console.log(`🔧 invoke function available:`, typeof invoke);
+    console.log(`🔧 Calling invoke with params:`, { providerId: providerId, token });
+    
+    try {
+      const result = await invoke('update_provider_token', {
+        providerId: providerId,
+        token
+      });
+      console.log(`✅ NativeBackend.updateProviderToken successful for: ${providerId}`, result);
+    } catch (error) {
+      console.error(`❌ NativeBackend.updateProviderToken failed for ${providerId}:`, error);
+      console.error(`❌ Error details:`, {
+        name: error instanceof Error ? error.name : 'Unknown',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
+    }
+  }
+
+  async validateProviderToken(providerId: number): Promise<boolean> {
+    return await invoke('validate_provider_token', {
+      providerId: providerId
     });
   }
 
-  async deleteProvider(providerId: string): Promise<void> {
+  async deleteProvider(providerId: number): Promise<void> {
     await invoke('delete_provider', {
-      providerId
+      providerId: providerId
     });
   }
 
   // Repository operations
-  async getRepositories(providerId?: string): Promise<Repository[]> {
+  async getRepositories(providerId?: number): Promise<Repository[]> {
     if (providerId) {
-      return await invoke('get_repositories_by_provider', {
-        providerId
-      });
+      return await invoke('get_repositories_by_provider', { providerId: providerId });
     }
     return await invoke('get_all_repositories');
   }
 
-  async getAllRepositories(): Promise<Repository[]> {
-    return await invoke('get_all_repositories');
+  async getRepository(repositoryId: number): Promise<Repository> {
+    return await invoke('get_repository', { repository_id: repositoryId });
   }
 
-  async addRepository(repository: Omit<Repository, 'id' | 'created_at' | 'updated_at'>): Promise<string> {
-    return await invoke('add_repository', {
-      providerId: repository.provider_id,
-      name: repository.name,
-      fullName: repository.full_name,
-      cloneUrl: repository.clone_url,
-      description: repository.description,
-      isPrivate: repository.is_private
-    });
+  async addRepository(repository: CreateRepositoryRequest): Promise<number> {
+    console.log('🔧 NativeBackend.addRepository called with:', repository);
+    try {
+      const result = await invoke('add_repository', {
+        providerId: repository.provider_id,
+        webUrl: repository.web_url
+      });
+      console.log('✅ NativeBackend.addRepository successful:', result);
+      return result as number;
+    } catch (error) {
+      console.error('❌ NativeBackend.addRepository failed:', error);
+      throw error;
+    }
   }
 
-  async deleteRepository(_repositoryId: string): Promise<void> {
-    // TODO: Implement in Tauri backend
-    throw new Error('deleteRepository not implemented in Tauri backend yet');
+  async deleteRepository(repositoryId: number): Promise<void> {
+    await invoke('delete_repository', { repository_id: repositoryId });
   }
 
   // Issue operations
-  async getIssues(_repositoryId?: string): Promise<Issue[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getIssues not implemented in Tauri backend yet');
+  async getIssues(filters?: IssueFilters, pagination?: PaginationParams): Promise<PaginatedResponse<Issue>> {
+    return await invoke('get_issues', { filters, pagination });
   }
 
-  async getAllIssues(): Promise<Issue[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getAllIssues not implemented in Tauri backend yet');
+  async getIssue(issueId: number): Promise<Issue> {
+    return await invoke('get_issue', { issue_id: issueId });
   }
 
-  async createIssue(_issue: Omit<Issue, 'id' | 'created_at' | 'updated_at'>): Promise<string> {
-    // TODO: Implement in Tauri backend
-    throw new Error('createIssue not implemented in Tauri backend yet');
-  }
-
-  async updateIssue(_issueId: string, _updates: Partial<Pick<Issue, 'title' | 'body' | 'state'>>): Promise<void> {
-    // TODO: Implement in Tauri backend
-    throw new Error('updateIssue not implemented in Tauri backend yet');
+  async getIssueStats(filters?: IssueFilters): Promise<IssueStats> {
+    return await invoke('get_issue_stats', { filters });
   }
 
   // Pull Request operations
-  async getPullRequests(_repositoryId?: string): Promise<PullRequest[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getPullRequests not implemented in Tauri backend yet');
+  async getPullRequests(filters?: PullRequestFilters, pagination?: PaginationParams): Promise<PaginatedResponse<PullRequest>> {
+    return await invoke('get_pull_requests', { filters, pagination });
   }
 
-  async getAllPullRequests(): Promise<PullRequest[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getAllPullRequests not implemented in Tauri backend yet');
+  async getPullRequest(prId: number): Promise<PullRequest> {
+    return await invoke('get_pull_request', { pr_id: prId });
   }
 
-  async createPullRequest(_pr: Omit<PullRequest, 'id' | 'created_at' | 'updated_at'>): Promise<string> {
-    // TODO: Implement in Tauri backend
-    throw new Error('createPullRequest not implemented in Tauri backend yet');
-  }
-
-  async updatePullRequest(_prId: string, _updates: Partial<Pick<PullRequest, 'title' | 'body' | 'state'>>): Promise<void> {
-    // TODO: Implement in Tauri backend
-    throw new Error('updatePullRequest not implemented in Tauri backend yet');
+  async getPullRequestStats(filters?: PullRequestFilters): Promise<PullRequestStats> {
+    return await invoke('get_pull_request_stats', { filters });
   }
 
   // Workflow operations
-  async getWorkflows(_repositoryId?: string): Promise<WorkflowRun[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getWorkflows not implemented in Tauri backend yet');
+  async getWorkflows(filters?: WorkflowFilters, pagination?: PaginationParams): Promise<PaginatedResponse<WorkflowRun>> {
+    return await invoke('get_workflows', { filters, pagination });
   }
 
-  async getAllWorkflows(): Promise<WorkflowRun[]> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getAllWorkflows not implemented in Tauri backend yet');
+  async getWorkflow(workflowId: number): Promise<WorkflowRun> {
+    return await invoke('get_workflow', { workflow_id: workflowId });
   }
 
-  // Dashboard stats
-  async getDashboardStats(): Promise<DashboardStats> {
-    // TODO: Implement in Tauri backend
-    throw new Error('getDashboardStats not implemented in Tauri backend yet');
+  async getWorkflowStats(filters?: WorkflowFilters): Promise<WorkflowStats> {
+    return await invoke('get_workflow_stats', { filters });
+  }
+
+  // Sync operations
+  async syncProvider(providerId: number): Promise<void> {
+    await invoke('sync_provider', { providerId: providerId });
+  }
+
+  async syncAllProviders(): Promise<void> {
+    await invoke('sync_all_providers');
+  }
+
+  async syncRepository(repositoryId: number): Promise<void> {
+    await invoke('sync_repository', { repository_id: repositoryId });
+  }
+
+  async isSyncInProgress(): Promise<boolean> {
+    return await invoke('is_sync_in_progress');
+  }
+
+  async getSyncStatus(): Promise<boolean> {
+    return await invoke('get_sync_status');
+  }
+
+  async resetSyncLock(): Promise<void> {
+    await invoke('reset_sync_lock');
+  }
+
+  async getSyncSettings(): Promise<SyncSettings> {
+    return await invoke('get_sync_settings');
+  }
+
+  async updateSyncSettings(settings: SyncSettings): Promise<void> {
+    await invoke('update_sync_settings', { new_settings: settings });
+  }
+
+  async getSyncHistory(limit?: number): Promise<SyncHistory[]> {
+    return await invoke('get_sync_history', { limit });
+  }
+
+  async openExternalUrl(url: string): Promise<void> {
+    await invoke('open_external_url', { url });
   }
 }

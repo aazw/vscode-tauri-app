@@ -1,10 +1,14 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBackend } from "../backends/BackendProvider";
-import { DashboardStats } from "../types/AppBackend";
+import { IssueStats, PullRequestStats, WorkflowStats } from "../types/AppBackend";
 
 const Dashboard = () => {
-  const [stats, setStats] = useState<DashboardStats>({
+  const [stats, setStats] = useState<{
+    issues: IssueStats;
+    pullRequests: PullRequestStats;
+    workflows: WorkflowStats;
+  }>({
     issues: { total: 0, open: 0, closed: 0, assigned: 0 },
     pullRequests: { total: 0, open: 0, merged: 0, closed: 0, assigned: 0 },
     workflows: { total: 0, success: 0, failure: 0, in_progress: 0, cancelled: 0 }
@@ -19,8 +23,16 @@ const Dashboard = () => {
       try {
         setLoading(true);
         setError(null);
-        const dashboardStats = await backend.getDashboardStats();
-        setStats(dashboardStats);
+        const [issueStats, prStats, workflowStats] = await Promise.all([
+          backend.getIssueStats(),
+          backend.getPullRequestStats(),
+          backend.getWorkflowStats()
+        ]);
+        setStats({
+          issues: issueStats,
+          pullRequests: prStats,
+          workflows: workflowStats
+        });
       } catch (err) {
         setError("Failed to load dashboard statistics");
         console.error("Error loading dashboard stats:", err);

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBackend } from "../backends/BackendProvider";
 import { Repository, GitProvider } from "../types/AppBackend";
+import { getRelativeTime } from "../utils/timeHelper";
 
 const Repositories = () => {
   const navigate = useNavigate();
@@ -11,7 +12,7 @@ const Repositories = () => {
   const [error, setError] = useState<string | null>(null);
   // const [, setSyncing] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const backend = useBackend();
   
   // Filters
@@ -44,7 +45,7 @@ const Repositories = () => {
       
       const [providersData, repositoriesData] = await Promise.all([
         backend.getProviders(),
-        backend.getAllRepositories()
+        backend.getRepositories()
       ]);
       
       setProviders(providersData);
@@ -58,20 +59,68 @@ const Repositories = () => {
   };
 
 
-  const toggleMenu = (repoId: string) => {
+  const toggleMenu = (repoId: number) => {
     setOpenMenuId(openMenuId === repoId ? null : repoId);
   };
 
-  const handleDeleteRepo = (repoId: string) => {
+  const handleDeleteRepo = async (repoId: number) => {
     if (window.confirm("Are you sure you want to delete this repository?")) {
-      setRepositories(repositories.filter(repo => repo.id !== repoId));
-      setOpenMenuId(null);
+      try {
+        await backend.deleteRepository(repoId);
+        setRepositories(repositories.filter(repo => repo.id !== repoId));
+        setOpenMenuId(null);
+      } catch (err) {
+        console.error('Failed to delete repository:', err);
+        setError('Failed to delete repository');
+      }
     }
   };
 
   const getLanguages = (): string[] => {
     const languages = [...new Set(repositories.map(repo => repo.language).filter(Boolean))] as string[];
     return languages.sort();
+  };
+
+  const getLastSyncInfo = (repo: Repository) => {
+    const syncTimes = [
+      repo.last_issues_sync,
+      repo.last_pull_requests_sync,
+      repo.last_workflows_sync
+    ].filter(Boolean) as string[];
+
+    if (syncTimes.length === 0) {
+      return { text: "Never synced", color: "text-gray-500", time: null };
+    }
+
+    // Find the most recent sync time
+    const mostRecentTime = syncTimes.reduce((latest, current) => {
+      return new Date(current) > new Date(latest) ? current : latest;
+    });
+
+    // Check if any sync is in progress
+    const hasInProgress = [
+      repo.last_issues_sync_status,
+      repo.last_pull_requests_sync_status,
+      repo.last_workflows_sync_status
+    ].includes('in_progress');
+
+    if (hasInProgress) {
+      return { text: "Syncing...", color: "text-yellow-600", time: mostRecentTime };
+    }
+
+    // Check if any sync failed
+    const hasFailure = [
+      repo.last_issues_sync_status,
+      repo.last_pull_requests_sync_status,
+      repo.last_workflows_sync_status
+    ].includes('failure');
+
+    if (hasFailure) {
+      return { text: getRelativeTime(mostRecentTime), color: "text-red-600", time: mostRecentTime };
+    }
+
+    // All successful
+    return { text: getRelativeTime(mostRecentTime), color: "text-green-600", time: mostRecentTime };
   };
 
   const filteredRepositories = repositories
@@ -83,15 +132,13 @@ const Repositories = () => {
       }
       
       // Provider filter
-      if (selectedProvider !== "all" && repo.provider_id !== selectedProvider) {
+      if (selectedProvider !== "all" && repo.provider_id.toString() !== selectedProvider) {
         return false;
       }
       
       // Visibility filter
       if (visibilityFilter === "public" && repo.is_private) return false;
       if (visibilityFilter === "private" && !repo.is_private) return false;
-      if (visibilityFilter === "archived" && !repo.is_archived) return false;
-      if (visibilityFilter === "active" && repo.is_archived) return false;
       
       // Language filter
       if (languageFilter !== "all" && repo.language !== languageFilter) {
@@ -107,26 +154,14 @@ const Repositories = () => {
         case "updated":
           return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
         case "created":
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        case "stars":
-          return b.stars_count - a.stars_count;
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+        case "name_desc":
+          return b.name.localeCompare(a.name);
         default:
           return 0;
       }
     });
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 1) return "Today";
-    if (diffDays < 7) return `${diffDays}d ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
-    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
-    return `${Math.floor(diffDays / 365)}y ago`;
-  };
 
   const getProviderIcon = (type: string) => {
     return type === "github" ? "🐙" : "🦊";
@@ -201,9 +236,9 @@ const Repositories = () => {
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Active</span>
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Public</span>
               <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {filteredRepositories.filter(r => !r.is_archived).length}
+                {filteredRepositories.filter(r => !r.is_private).length}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
@@ -238,8 +273,6 @@ const Repositories = () => {
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
                 <option value="all">All Repos</option>
-                <option value="active">Active</option>
-                <option value="archived">Archived</option>
                 <option value="public">Public</option>
                 <option value="private">Private</option>
               </select>
@@ -267,8 +300,8 @@ const Repositories = () => {
               key={repo.id} 
               className={`p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
                 index !== filteredRepositories.length - 1 ? 'border-b border-gray-300' : ''
-              } ${repo.is_archived ? 'opacity-60' : ''}`}
-              onClick={() => window.open(repo.web_url, '_blank')} 
+              }`}
+              onClick={() => backend.openExternalUrl(repo.web_url)} 
               role="button" 
               tabIndex={0}
             >
@@ -305,15 +338,15 @@ const Repositories = () => {
 
             <div className="mb-3">
               <div className="flex items-center gap-2 mb-2">
-                <a 
-                  href={repo.web_url} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-blue-600 hover:text-blue-800 font-medium text-sm cursor-pointer hover:underline" 
-                  onClick={(e) => e.stopPropagation()}
+                <span 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    backend.openExternalUrl(repo.web_url);
+                  }}
+                  className="text-blue-600 hover:text-blue-800 font-medium text-sm cursor-pointer hover:underline"
                 >
                   {repo.full_name}
-                </a>
+                </span>
               </div>
               <div className="flex flex-wrap gap-1">
                 {repo.is_private && (
@@ -321,29 +354,11 @@ const Repositories = () => {
                     Private
                   </span>
                 )}
-                {repo.is_fork && (
-                  <span className="inline-block px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">
-                    Fork
-                  </span>
-                )}
-                {repo.is_archived && (
-                  <span className="inline-block px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full font-medium">
-                    Archived
-                  </span>
-                )}
               </div>
             </div>
 
             <div className="flex items-center justify-between text-xs text-gray-600">
               <div className="flex items-center gap-4">
-                <span className="flex items-center gap-1">
-                  <span>🐛</span>
-                  <span>{repo.issues_count}</span>
-                </span>
-                <span className="flex items-center gap-1">
-                  <span>🔀</span>
-                  <span>{repo.forks_count}</span>
-                </span>
                 {repo.language && (
                   <span 
                     className="inline-block px-2 py-1 rounded-full text-white text-xs font-medium"
@@ -353,7 +368,15 @@ const Repositories = () => {
                   </span>
                 )}
               </div>
-              <span>{formatDate(repo.updated_at)}</span>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Last Sync:</span>
+                  <span className={getLastSyncInfo(repo).color}>
+                    {getLastSyncInfo(repo).text}
+                  </span>
+                </div>
+                <span>{getRelativeTime(repo.updated_at)}</span>
+              </div>
             </div>
           </div>
           ))}

@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
 import { useBackend } from "../backends/BackendProvider";
 import { WorkflowRun } from "../types/AppBackend";
+import { getRelativeTime } from "../utils/timeHelper";
 
 const Workflows = () => {
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>([]);
+  const [allWorkflows, setAllWorkflows] = useState<WorkflowRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [providerFilter, setProviderFilter] = useState<string>("all");
+  const [repositoryFilter, setRepositoryFilter] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
+  
   const backend = useBackend();
 
   useEffect(() => {
@@ -16,8 +19,8 @@ const Workflows = () => {
       try {
         setLoading(true);
         setError(null);
-        const allWorkflows = await backend.getAllWorkflows();
-        setWorkflowRuns(allWorkflows);
+        const response = await backend.getWorkflows();
+        setAllWorkflows(response.data);
       } catch (err) {
         setError("Failed to load workflows");
         console.error("Error loading workflows:", err);
@@ -29,40 +32,33 @@ const Workflows = () => {
     loadWorkflows();
   }, [backend]);
 
-  const filteredWorkflows = workflowRuns.filter(workflow => {
+  const filteredWorkflows = allWorkflows.filter(workflow => {
     // Status filter
-    if (statusFilter !== "all" && workflow.status !== statusFilter) return false;
+    if (statusFilter !== "all" && workflow.conclusion !== statusFilter) return false;
     
     // Provider filter
     if (providerFilter !== "all" && workflow.provider !== providerFilter) return false;
     
+    // Repository filter
+    if (repositoryFilter !== "all" && workflow.repository !== repositoryFilter) return false;
+    
     return true;
-  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }).sort((a, b) => new Date(b.api_created_at || 0).getTime() - new Date(a.api_created_at || 0).getTime());
 
   // Get unique providers
-  const providers = [...new Set(workflowRuns.map(workflow => workflow.provider))].sort();
+  const providers = [...new Set(allWorkflows.map(workflow => workflow.provider))].sort();
+  
+  // Get unique repositories
+  const repositories = [...new Set(allWorkflows.map(workflow => workflow.repository))].sort();
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
+  const getStatusIcon = (status: string, conclusion: string) => {
+    if (status === "in_progress") return "🟡";
+    switch (conclusion) {
       case "success": return "✅";
       case "failure": return "❌";
-      case "in_progress": return "🔄";
-      case "cancelled": return "⚪";
+      case "cancelled": return "⭕";
       default: return "❓";
     }
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffHours < 1) return "Just now";
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
   };
 
   if (loading) {
@@ -106,25 +102,19 @@ const Workflows = () => {
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Success</span>
               <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {workflowRuns.filter(w => w.status === "success").length}
+                {allWorkflows.filter(w => w.conclusion === "success").length}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Failure</span>
               <span className="px-2 py-1 bg-red-500 text-white font-semibold">
-                {workflowRuns.filter(w => w.status === "failure").length}
+                {allWorkflows.filter(w => w.conclusion === "failure").length}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">In Progress</span>
               <span className="px-2 py-1 bg-yellow-500 text-white font-semibold">
-                {workflowRuns.filter(w => w.status === "in_progress").length}
-              </span>
-            </div>
-            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Cancelled</span>
-              <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
-                {workflowRuns.filter(w => w.status === "cancelled").length}
+                {allWorkflows.filter(w => w.status === "in_progress").length}
               </span>
             </div>
           </div>
@@ -133,16 +123,15 @@ const Workflows = () => {
         {/* Filter Dropdown */}
         {showFilters && (
           <div className="mt-3 pt-3 border-t border-gray-200">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <select 
                 value={statusFilter} 
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               >
-                <option value="all">All Workflows</option>
+                <option value="all">All Statuses</option>
                 <option value="success">Success</option>
                 <option value="failure">Failure</option>
-                <option value="in_progress">In Progress</option>
                 <option value="cancelled">Cancelled</option>
               </select>
               <select 
@@ -155,69 +144,64 @@ const Workflows = () => {
                   <option key={provider} value={provider}>{provider}</option>
                 ))}
               </select>
+              <select 
+                value={repositoryFilter} 
+                onChange={(e) => setRepositoryFilter(e.target.value)}
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="all">All Repositories</option>
+                {repositories.map(repository => (
+                  <option key={repository} value={repository}>{repository}</option>
+                ))}
+              </select>
             </div>
           </div>
         )}
       </div>
 
       {/* Workflow List */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-6">
         <div className="bg-white border-t border-b border-gray-300">
           {filteredWorkflows.map((workflow, index) => (
             <div 
               key={workflow.id} 
-              className={`p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
+              className={`p-2 hover:bg-gray-50 transition-colors cursor-pointer ${
                 index !== filteredWorkflows.length - 1 ? 'border-b border-gray-300' : ''
               }`}
-              onClick={() => window.open(workflow.url, '_blank')} 
+              onClick={() => backend.openExternalUrl(workflow.url)} 
               role="button" 
               tabIndex={0}
             >
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-start gap-3 flex-1">
-                <span className="text-lg">{getStatusIcon(workflow.status)}</span>
-                <div className="flex-1">
-                  <a 
-                    href={workflow.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-blue-600 hover:text-blue-800 font-medium text-sm leading-tight cursor-pointer hover:underline"
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-sm">{getStatusIcon(workflow.status, workflow.conclusion || '')}</span>
+                  <span 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      backend.openExternalUrl(workflow.url);
+                    }}
+                    className="text-blue-600 hover:text-blue-800 font-medium text-sm leading-tight cursor-pointer hover:underline truncate"
                   >
                     {workflow.name}
-                  </a>
+                  </span>
                 </div>
+                <span className="text-xs text-gray-500 font-mono ml-2">#{workflow.id}</span>
               </div>
-              <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${
-                workflow.status === 'success' ? 'bg-green-100 text-green-800' :
-                workflow.status === 'failure' ? 'bg-red-100 text-red-800' :
-                workflow.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                'bg-gray-100 text-gray-800'
-              }`}>
-                {workflow.status}
-              </span>
-            </div>
-            <div className="space-y-2 text-xs text-gray-600 mb-3">
-              <div className="flex flex-wrap items-center gap-4">
-                <span className="font-medium">{workflow.provider} / {workflow.repository}</span>
-                <span>on {workflow.branch}</span>
-              </div>
-              <div className="font-mono text-xs">
-                {workflow.commit_sha.substring(0, 7)} - {workflow.commit_message}
+              <div className="flex items-center justify-between text-xs text-gray-600">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="font-medium truncate">{workflow.provider} / {workflow.repository}</span>
+                  <span className="shrink-0">{workflow.status}</span>
+                </div>
+                <span className="text-xs text-gray-500 shrink-0">{getRelativeTime(workflow.api_created_at || '')}</span>
               </div>
             </div>
-            <div className="flex items-center justify-between text-xs text-gray-500">
-              <span>by {workflow.author}</span>
-              <span>{formatDate(workflow.created_at)}</span>
-            </div>
-          </div>
           ))}
         </div>
-        
+
         {filteredWorkflows.length === 0 && (
           <div className="text-center py-12">
             <h3 className="text-lg font-medium text-gray-900 mb-2">No workflows found</h3>
-            <p className="text-gray-600">Try adjusting your filters.</p>
+            <p className="text-gray-600">No workflows available.</p>
           </div>
         )}
       </div>

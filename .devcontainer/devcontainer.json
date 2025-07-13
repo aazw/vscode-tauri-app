@@ -18,9 +18,11 @@
         "emeraldwalk.runonsave",
         "ms-azuretools.vscode-containers",
         "ms-azuretools.vscode-docker",
+        "tamasfe.even-better-toml",
         "tauri-apps.tauri-vscode",
         "rust-lang.rust-analyzer",
-        "qwtel.sqlite-viewer"
+        "qwtel.sqlite-viewer",
+        "mermaidchart.vscode-mermaid-chart"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash"

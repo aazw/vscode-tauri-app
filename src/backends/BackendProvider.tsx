@@ -2,16 +2,15 @@ import { createContext, useContext, ReactNode } from 'react';
 import { AppBackend } from '../types/AppBackend';
 import { NativeBackend } from './NativeBackend';
 import { MockBackend } from './MockBackend';
-import { WebBackend } from './WebBackend';
 
 const BackendContext = createContext<AppBackend | null>(null);
 
 interface BackendProviderProps {
   children: ReactNode;
-  forceBackend?: 'native' | 'mock' | 'web';
+  forceBackend?: 'native' | 'mock';
 }
 
-function createBackend(type?: 'native' | 'mock' | 'web'): AppBackend {
+function createBackend(type?: 'native' | 'mock'): AppBackend {
   // Force specific backend if specified
   if (type === 'native') {
     return new NativeBackend();
@@ -19,18 +18,33 @@ function createBackend(type?: 'native' | 'mock' | 'web'): AppBackend {
   if (type === 'mock') {
     return new MockBackend();
   }
-  if (type === 'web') {
-    return new WebBackend();
-  }
 
-  // Auto-detect environment
-  const isTauri = typeof window !== 'undefined' && window.__TAURI__;
+  // Auto-detect environment with multiple checks
+  const isTauri = typeof window !== 'undefined' && (
+    window.__TAURI__ || 
+    (window as any).__TAURI_METADATA__ || 
+    (window as any).__TAURI_PLUGIN_OPENER__ ||
+    // Check for Tauri-specific APIs
+    (window as any).__TAURI_INVOKE__
+  );
   
-  if (isTauri) {
+  console.log('🔍 Environment detection:', {
+    hasWindow: typeof window !== 'undefined',
+    hasTauri: !!(window as any)?.__TAURI__,
+    hasTauriMetadata: !!(window as any)?.__TAURI_METADATA__,
+    hasTauriInvoke: !!(window as any).__TAURI_INVOKE__,
+    isTauri
+  });
+  
+  // Force NativeBackend for testing (temporary)
+  const forceNative = true; // Set to true to force NativeBackend
+  
+  if (isTauri || forceNative) {
+    console.log('✅ Using NativeBackend (Tauri environment detected or forced)');
     return new NativeBackend();
   } else {
-    // For web development, use WebBackend with SQLite
-    return new WebBackend();
+    console.log('⚠️ Using MockBackend (Web environment detected)');
+    return new MockBackend();
   }
 }
 
