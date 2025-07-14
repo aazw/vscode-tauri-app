@@ -4,246 +4,235 @@
 
 本アプリケーションの同期システムは、複数のGitプロバイダ（GitHub、GitLab）から Issues、Pull Requests、Workflows の情報を効率的に同期し、ユーザーに統合されたビューを提供します。
 
+## ロック機構の設計
+
+### 1. 同期ロック (Sync Lock)
+**目的**: 同期処理の重複実行防止
+- **実装**: `AtomicBool sync_in_progress`
+- **スコープ**: アプリケーション全体の同期制御
+- **動作**: 1つの同期プロセスのみ実行を許可
+
+### 2. データベースロック (DB Lock)
+**目的**: データベースアクセスの排他制御
+- **実装**: `Arc<Mutex<Database>>`
+- **スコープ**: 各データベース操作
+- **動作**: 短時間の読み取り/書き込み保護
+
 ## システム構成
 
 ```mermaid
 sequenceDiagram
+    participant UI as UI(読み取り専用)
     participant Scheduler as スケジューラ
     participant SyncService as 同期サービス
-    participant SyncHistory as 同期履歴管理
+    participant SyncLock as 同期ロック(AtomicBool)
     participant DB as データベース
-    participant SyncLock as 同期ロック
-    participant InAppNotif as アプリ内通知(ベルマーク)
-    participant OSNotif as OS通知(Mac/Windows)
+    participant DBLock as DBロック(Mutex)
     participant GitAPI as Git API (GitHub/GitLab)
 
-    Scheduler->>SyncLock: 同期ロック確認
+    Note over UI, DBLock: 並行処理: 同期中でも読み取り可能
+
+    UI->>DBLock: 短時間ロック取得
+    DBLock->>DB: SELECT (repositories, issues, etc.)
+    DB-->>DBLock: データ返却
+    DBLock-->>UI: ロック即座に解放
+    Note over UI: UIは同期中でも応答
+
+    Scheduler->>SyncLock: 同期可能性確認(AtomicBool)
     alt 同期中
         SyncLock-->>Scheduler: 同期スキップ
     else 同期可能
-        SyncLock->>SyncService: 同期開始
-        activate SyncService
-        
-        SyncService->>SyncHistory: 同期開始記録
-        SyncHistory->>DB: sync_history INSERT
+        Scheduler->>SyncLock: 同期開始フラグ設定
         
         loop 各プロバイダ
-            SyncService->>DB: プロバイダ情報取得
-            DB-->>SyncService: プロバイダ設定
+            Note over SyncService, DBLock: 短時間ロックパターン
             
-            SyncService->>GitAPI: トークン検証
+            SyncService->>DBLock: プロバイダ情報取得(短時間ロック)
+            DBLock->>DB: SELECT provider
+            DB-->>DBLock: プロバイダ設定
+            DBLock-->>SyncService: ロック解放
+            
+            SyncService->>GitAPI: トークン検証(ロックなし)
             GitAPI-->>SyncService: 検証結果
             
             alt トークン有効
-                SyncService->>DB: last_sync取得（リソース別）
-                DB-->>SyncService: 前回同期時刻
+                SyncService->>DBLock: last_sync取得(短時間ロック)
+                DBLock->>DB: SELECT last_sync timestamps
+                DB-->>DBLock: 前回同期時刻
+                DBLock-->>SyncService: ロック解放
                 
                 loop 各リポジトリ
+                    Note over SyncService, GitAPI: API呼び出し(ロックなし)
                     SyncService->>GitAPI: イシュー取得(since: last_issues_sync)
                     GitAPI-->>SyncService: イシュー差分
                     
+                    Note over SyncService, DBLock: DB更新(短時間ロック)
+                    SyncService->>DBLock: イシュー更新(短時間ロック)
+                    DBLock->>DB: INSERT/UPDATE issues
+                    DBLock->>DB: UPDATE last_issues_sync
+                    DBLock-->>SyncService: ロック解放
+                end
+                    
+                loop 各リポジトリ
                     SyncService->>GitAPI: プルリクエスト取得(since: last_pull_requests_sync)
                     GitAPI-->>SyncService: プルリクエスト差分
                     
+                    SyncService->>DBLock: プルリクエスト更新(短時間ロック)
+                    DBLock->>DB: INSERT/UPDATE pull_requests
+                    DBLock->>DB: UPDATE last_pull_requests_sync
+                    DBLock-->>SyncService: ロック解放
+                end
+                    
+                loop 各リポジトリ
                     SyncService->>GitAPI: ワークフロー実行取得(since: last_workflows_sync)
                     GitAPI-->>SyncService: ワークフロー実行差分
                     
-                    SyncService->>DB: リソース別同期状態更新
+                    SyncService->>DBLock: ワークフロー更新(短時間ロック)
+                    DBLock->>DB: INSERT/UPDATE workflows
+                    DBLock->>DB: UPDATE last_workflows_sync
+                    DBLock-->>SyncService: ロック解放
                 end
-                
-                SyncService->>DB: データ一括更新
-                SyncService->>DB: 同期状態更新(成功)
-                
-                SyncService->>InAppNotif: 新規イベント通知
-                SyncService->>OSNotif: 新規イベント通知
             else トークン無効
-                SyncService->>DB: 同期状態更新(トークンエラー)
-                SyncService->>InAppNotif: トークンエラー通知
-                SyncService->>OSNotif: トークンエラー通知
+                SyncService->>DBLock: 同期状態更新(短時間ロック)
+                DBLock->>DB: UPDATE sync_status
+                DBLock-->>SyncService: ロック解放
             end
         end
         
-        SyncService->>SyncHistory: 同期完了記録
-        SyncHistory->>DB: sync_history UPDATE
-        SyncLock->>SyncLock: 同期ロック解除
-        
-        deactivate SyncService
+        SyncService->>SyncLock: 同期完了フラグ設定
+        Note over SyncLock: AtomicBool.store(false)
     end
+
+    Note over UI, DBLock: 同期完了後も引き続き並行読み取り可能
 ```
 
-## 主要機能
+## ロック最適化戦略
 
-### 1. 同期スケジューラ
-
-**自動同期システム**
-- バックグラウンドスレッドによる定期実行
-- 設定可能な同期間隔 (`sync_interval_minutes`)
-- 自動同期の有効/無効切り替え (`auto_sync_enabled`)
-- リアルタイム設定変更対応
-
-**実装場所**: `src-tauri/src/lib.rs`
+### 1. 同期ロック管理
+**実装**: RAII パターンによる自動解放
 ```rust
-pub struct SyncSettings {
-    pub sync_interval_minutes: u64,
-    pub auto_sync_enabled: bool,
+struct SyncGuard {
+    db: Arc<Mutex<Database>>,
+}
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        let db_guard = self.db.lock().unwrap();
+        db_guard.sync_in_progress.store(false, Ordering::Release);
+    }
 }
 ```
 
-### 2. 同期ロック機能
+### 2. データベースロック最小化
+**戦略**: 各操作で短時間ロック→即座に解放
 
-**排他制御システム**
-- `AtomicBool`による同期の重複実行防止
-- リアルタイム同期状態確認
-- 同期ロック強制解除機能
+**Before (問題のあるパターン)**:
+```rust
+// 同期処理全体で長時間ロック
+let mut db_guard = db.lock().unwrap();
+db_guard.sync_provider(provider_id).await; // 数分間ロック保持
+```
 
-**API:**
-- `isSyncInProgress()` - 同期状態確認
-- `resetSyncLock()` - 強制ロック解除
+**After (最適化されたパターン)**:
+```rust
+// 1. プロバイダ取得 (短時間ロック)
+let provider = {
+    let db_guard = db.lock().unwrap();
+    db_guard.get_provider(provider_id)?
+}; // ロック即座に解放
 
-### 3. 同期履歴管理
+// 2. API呼び出し (ロックなし)
+let issues = api.fetch_issues(&provider, since).await?;
 
-**詳細なログシステム**
-- 全同期実行の記録保存
-- パフォーマンス指標の追跡
-- エラー分析とデバッグ支援
+// 3. DB更新 (短時間ロック)
+{
+    let mut db_guard = db.lock().unwrap();
+    db_guard.upsert_issues(&issues)?;
+    db_guard.update_sync_timestamp(repo_id, "issues")?;
+} // ロック即座に解放
+```
 
-**同期履歴データ構造:**
+### 3. SQLite WAL モード
+**設定**: 読み取りと書き込みの並行実行を実現
+```sql
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA wal_autocheckpoint=1000;
+PRAGMA temp_store=memory;
+```
+
+## 並行性の実現
+
+### 1. 読み取り操作の最適化
+**UIからのクエリ**: 同期中でも即座に実行可能
 ```typescript
-interface SyncHistory {
-  id: number;
-  sync_type: string;           // 'provider', 'all_providers', 'repository'
-  target_id: number | null;
-  target_name: string;
-  status: string;              // 'started', 'completed', 'failed'
-  error_message: string | null;
-  items_synced: number;        // 同期されたアイテム数
-  repositories_synced: number; // 同期されたリポジトリ数
-  errors_count: number;        // エラー数
-  started_at: string;
-  completed_at: string | null;
-  duration_seconds: number | null;
+// ダッシュボード表示
+async fn get_issues() -> Result<Vec<Issue>> {
+    let issues = {
+        let db = db.lock().unwrap();
+        db.get_issues(filters, pagination)?
+    }; // 短時間ロック→即座に解放
+    Ok(issues)
 }
 ```
 
-### 4. リソース別同期管理
+### 2. 同期処理の細分化
+**リソース別分割**: Issues, PRs, Workflows を個別処理
+- 各リソースで独立したsync timestamp
+- API呼び出しとDB更新の分離
+- エラー発生時も他リソースの処理継続
 
-**きめ細かい同期制御**
-- Issues、Pull Requests、Workflows 個別の同期タイムスタンプ
-- リソース別同期ステータス管理
-- 部分同期失敗時の継続実行
+### 3. 非同期処理の活用
+**ネットワーク処理**: DBロック外で実行
+```rust
+// API呼び出し (ロック不要)
+let data = fetch_from_api(provider, since).await?;
 
-**リポジトリテーブル拡張:**
-```sql
--- リソース別同期タイムスタンプ
-last_issues_sync           TIMESTAMP,
-last_pull_requests_sync    TIMESTAMP,
-last_workflows_sync        TIMESTAMP,
-
--- リソース別同期ステータス
-last_issues_sync_status_id          INTEGER,
-last_pull_requests_sync_status_id   INTEGER,
-last_workflows_sync_status_id       INTEGER,
-```
-
-### 5. 高度なエラーハンドリング
-
-**堅牢なエラー処理**
-- 部分成功の適切な処理
-- 詳細なエラーメッセージ保存
-- エラー統計の自動集計
-- 継続可能なエラー回復
-
-**エラー分類:**
-- トークン認証エラー
-- API通信エラー
-- データベースエラー
-- ネットワークエラー
-
-### 6. UI統合機能
-
-**ユーザーインターフェース**
-- **履歴表示**: `History.tsx` - 同期実行履歴の詳細表示
-- **設定管理**: `Settings.tsx` - 同期設定のリアルタイム変更
-- **手動同期**: プロバイダ別・リポジトリ別手動実行
-- **状態表示**: 同期進行状況のリアルタイム表示
-
-## API エンドポイント
-
-### 同期制御
-```typescript
-// 同期実行
-syncProvider(providerId: number): Promise<void>
-syncAllProviders(): Promise<void>
-syncRepository(repositoryId: number): Promise<void>
-
-// 状態管理
-isSyncInProgress(): Promise<boolean>
-getSyncStatus(): Promise<boolean>
-resetSyncLock(): Promise<void>
-
-// 設定管理
-getSyncSettings(): Promise<SyncSettings>
-updateSyncSettings(settings: SyncSettings): Promise<void>
-
-// 履歴管理
-getSyncHistory(limit?: number): Promise<SyncHistory[]>
-```
-
-## データベース設計
-
-### 同期履歴テーブル
-```sql
-CREATE TABLE sync_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sync_type TEXT NOT NULL,
-    target_id INTEGER,
-    target_name TEXT NOT NULL,
-    status TEXT NOT NULL,
-    error_message TEXT,
-    items_synced INTEGER DEFAULT 0,
-    repositories_synced INTEGER DEFAULT 0,
-    errors_count INTEGER DEFAULT 0,
-    started_at TIMESTAMP NOT NULL,
-    completed_at TIMESTAMP,
-    duration_seconds INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### 同期ステータス管理
-```sql
-CREATE TABLE sync_statuses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT UNIQUE NOT NULL -- 'success', 'failure', 'in_progress'
-);
+// DB更新のみ短時間ロック
+{
+    let mut db = db.lock().unwrap();
+    db.save_data(data)?;
+}
 ```
 
 ## パフォーマンス特性
 
-### 効率性
-- **差分同期**: `since`パラメータによる増分更新
-- **並列処理**: 複数リポジトリの並行同期
-- **リソース最適化**: メモリ効率的なバッチ処理
+### 並行読み取り性能
+- **同期中の読み取り**: 即座に実行 (WAL + 短時間ロック)
+- **UI応答性**: 同期状態に関係なく高速
+- **ダッシュボード更新**: リアルタイム表示
 
-### 可用性
-- **エラー耐性**: 部分失敗時の続行
-- **自動回復**: 一時的な障害からの自動復旧
-- **ロック管理**: デッドロック防止機能
+### ロック競合の最小化
+- **ロック保持時間**: SQLクエリ実行時のみ
+- **ロック粒度**: 操作単位の細分化
+- **デッドロック回避**: 単一ロック順序
 
-### 監視性
-- **詳細ログ**: 全同期処理の追跡可能性
-- **メトリクス**: パフォーマンス指標の自動収集
-- **エラー分析**: 問題の迅速な特定と解決
-
-## 制限事項
-
-### 現在未実装の機能
-- **通知システム**: アプリ内通知およびOS通知
-- **リアルタイム進捗**: 同期中の詳細進捗表示
-- **高度な再試行**: 失敗時の自動再試行機能
+## 制限事項と考慮事項
 
 ### 技術的制約
-- **同期間隔**: 最小1分間隔
-- **同時実行**: 1つの同期プロセスのみ
-- **API制限**: 各プロバイダのレート制限に依存
+- **SQLite接続**: 単一接続での排他制御が必要
+- **Rustのメモリ安全性**: Sync/Send制約によるアーキテクチャ制限
+- **同期の順序性**: データ整合性確保のため一部順次処理
+
+### パフォーマンス考慮
+- **WALファイル管理**: 定期的なcheckpoint処理
+- **メモリ使用量**: 大量データ同期時の制御
+- **API レート制限**: 外部API制約の遵守
+
+## 監視とデバッグ
+
+### ロック状態の可視性
+```typescript
+// 同期状態確認
+isSyncInProgress(): Promise<boolean>
+
+// ロック強制解除 (デバッグ用)
+resetSyncLock(): Promise<void>
+```
+
+### パフォーマンス指標
+- 同期処理時間の測定
+- ロック競合の検出
+- UI応答時間の監視
+
+この設計により、同期処理中でもユーザーインターフェースが完全に応答性を維持し、真の並行処理が実現されます。

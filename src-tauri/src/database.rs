@@ -202,7 +202,7 @@ pub struct WorkflowStats {
 
 // API response structures for sync
 #[derive(Debug, Deserialize)]
-struct GitHubIssue {
+pub struct GitHubIssue {
     pub id: u64,
     pub number: u32,
     pub title: String,
@@ -218,7 +218,7 @@ struct GitHubIssue {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubPullRequest {
+pub struct GitHubPullRequest {
     pub id: u64,
     pub number: u32,
     pub title: String,
@@ -234,7 +234,7 @@ struct GitHubPullRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubWorkflowRun {
+pub struct GitHubWorkflowRun {
     pub id: u64,
     pub name: String,
     pub status: String,
@@ -245,12 +245,12 @@ struct GitHubWorkflowRun {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubUser {
+pub struct GitHubUser {
     pub login: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubLabel {
+pub struct GitHubLabel {
     pub name: String,
 }
 
@@ -261,7 +261,7 @@ struct GitHubWorkflowRunsResponse {
 
 // GitLab structures (similar pattern)
 #[derive(Debug, Deserialize)]
-struct GitLabIssue {
+pub struct GitLabIssue {
     pub id: u64,
     pub iid: u32,
     pub title: String,
@@ -276,7 +276,7 @@ struct GitLabIssue {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitLabMergeRequest {
+pub struct GitLabMergeRequest {
     pub id: u64,
     pub iid: u32,
     pub title: String,
@@ -301,7 +301,7 @@ struct GitLabPipeline {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitLabUser {
+pub struct GitLabUser {
     pub username: String,
 }
 
@@ -342,6 +342,14 @@ impl Database {
         let mut conn = Connection::open(path.as_ref())?;
         debug!("✅ Database connection established");
         
+        // Enable WAL mode for concurrent read/write access
+        info!("🔧 Enabling SQLite WAL mode for better concurrency");
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
+        conn.pragma_update(None, "temp_store", "memory")?;
+        info!("✅ WAL mode enabled successfully");
+        
         // Refineryを使用してマイグレーションを実行
         info!("🚀 Running database migrations");
         match migrations::runner().run(&mut conn) {
@@ -379,6 +387,14 @@ impl Database {
     pub fn reset_sync_lock(&self) {
         self.sync_in_progress.store(false, Ordering::Release);
         warn!("🔓 Sync lock manually reset");
+    }
+    
+    pub fn is_sync_in_progress(&self) -> bool {
+        self.sync_in_progress.load(Ordering::Acquire)
+    }
+    
+    pub fn try_start_sync(&self) -> bool {
+        self.sync_in_progress.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok()
     }
 
     // Provider operations
@@ -1422,24 +1438,18 @@ impl Database {
             format!("Failed to get repositories: {}", e)
         })?;
         
-        // Use the earliest sync time across all repositories and resource types
-        let last_sync_time = repositories.iter()
-            .flat_map(|repo| [repo.last_issues_sync, repo.last_pull_requests_sync, repo.last_workflows_sync])
-            .filter_map(|dt| dt)
-            .min();
-        
-        let since = last_sync_time.map(|dt| dt.to_rfc3339());
-        info!("📅 Last sync time (earliest across {} repositories): {:?}", repositories.len(), since);
         info!("📁 Found {} repositories to sync", repositories.len());
         
         let mut total_synced = 0;
         let mut errors = Vec::new();
         
-        // Step 4: Sync each repository
+        // Step 4: Sync each repository with individual sync times
         for repo in &repositories {
             info!("🔄 Syncing repository: {} ({})", repo.name, repo.id);
+            info!("📅 Repository sync times - Issues: {:?}, PRs: {:?}, Workflows: {:?}", 
+                  repo.last_issues_sync, repo.last_pull_requests_sync, repo.last_workflows_sync);
             
-            match self.sync_repository_data(&provider, repo, since.as_deref()).await {
+            match self.sync_repository_data(&provider, repo).await {
                 Ok(synced_count) => {
                     total_synced += synced_count;
                     info!("✅ Synced {} items from {}", synced_count, repo.name);
@@ -1518,88 +1528,152 @@ impl Database {
         result
     }
 
-    async fn sync_repository_data(&mut self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn sync_repository_data(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
         let mut synced_count = 0u32;
         
-        match provider.provider_type.as_str() {
-            "github" => {
-                // Sync GitHub issues
-                let issues = self.fetch_github_issues(provider, repo, since).await?;
-                for issue in &issues {
-                    self.upsert_issue_from_github(issue, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("📝 Synced {} GitHub issues", issues.len());
-                
-                // Sync GitHub pull requests
-                let prs = self.fetch_github_pull_requests(provider, repo, since).await?;
-                for pr in &prs {
-                    self.upsert_pr_from_github(pr, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("🔀 Synced {} GitHub pull requests", prs.len());
-                
-                // Sync GitHub workflows
-                let workflows = self.fetch_github_workflows(provider, repo, since).await?;
-                for workflow in &workflows {
-                    self.upsert_workflow_from_github(workflow, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("⚙️ Synced {} GitHub workflows", workflows.len());
-            }
-            "gitlab" => {
-                // Sync GitLab issues
-                let issues = self.fetch_gitlab_issues(provider, repo, since).await?;
-                for issue in &issues {
-                    self.upsert_issue_from_gitlab(issue, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("📝 Synced {} GitLab issues", issues.len());
-                
-                // Sync GitLab merge requests
-                let mrs = self.fetch_gitlab_merge_requests(provider, repo, since).await?;
-                for mr in &mrs {
-                    self.upsert_mr_from_gitlab(mr, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("🔀 Synced {} GitLab merge requests", mrs.len());
-                
-                // Sync GitLab pipelines
-                let pipelines = self.fetch_gitlab_pipelines(provider, repo, since).await?;
-                for pipeline in &pipelines {
-                    self.upsert_pipeline_from_gitlab(pipeline, repo, provider)?;
-                    synced_count += 1;
-                }
-                info!("⚙️ Synced {} GitLab pipelines", pipelines.len());
-            }
-            _ => {
-                return Err(format!("Unsupported provider type: {}", provider.provider_type).into());
-            }
-        }
-        
-        // Update repository sync status
-        let now = Utc::now().to_rfc3339();
-        let success_status_id = self.get_sync_status_id("success")?;
-        
-        self.conn.execute(
-            "UPDATE repositories SET 
-                last_issues_sync = ?, last_issues_sync_status_id = ?,
-                last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?,
-                last_workflows_sync = ?, last_workflows_sync_status_id = ?,
-                updated_at = ? 
-             WHERE id = ?",
-            rusqlite::params![
-                &now, success_status_id,  // issues
-                &now, success_status_id,  // pull requests
-                &now, success_status_id,  // workflows
-                &now,                     // updated_at
-                repo.id
-            ],
-        )?;
+        // Sync each resource type separately with minimal DB locks
+        synced_count += self.sync_repository_issues(provider, repo).await?;
+        synced_count += self.sync_repository_pull_requests(provider, repo).await?;
+        synced_count += self.sync_repository_workflows(provider, repo).await?;
         
         info!("📊 Updated sync status for repository: {} ({})", repo.name, repo.id);
         
         Ok(synced_count)
+    }
+
+    // Split resource sync methods for minimal DB locking
+    async fn sync_repository_issues(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+        let issues_since = repo.last_issues_sync.map(|dt| dt.to_rfc3339());
+        
+        match provider.provider_type.as_str() {
+            "github" => {
+                let issues = Database::fetch_github_issues(provider, repo, issues_since.as_deref()).await?;
+                let count = issues.len() as u32;
+                
+                // DB lock only for upsert operations
+                for issue in &issues {
+                    self.upsert_issue_from_github(issue, repo, provider)?;
+                }
+                
+                // Update sync status for issues only
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("📝 Synced {} GitHub issues for {}", count, repo.name);
+                Ok(count)
+            }
+            "gitlab" => {
+                let issues = Database::fetch_gitlab_issues(provider, repo, issues_since.as_deref()).await?;
+                let count = issues.len() as u32;
+                
+                for issue in &issues {
+                    self.upsert_issue_from_gitlab(issue, repo, provider)?;
+                }
+                
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("📝 Synced {} GitLab issues for {}", count, repo.name);
+                Ok(count)
+            }
+            _ => Err(format!("Unsupported provider type: {}", provider.provider_type).into())
+        }
+    }
+    
+    async fn sync_repository_pull_requests(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+        let prs_since = repo.last_pull_requests_sync.map(|dt| dt.to_rfc3339());
+        
+        match provider.provider_type.as_str() {
+            "github" => {
+                let prs = Database::fetch_github_pull_requests(provider, repo, prs_since.as_deref()).await?;
+                let count = prs.len() as u32;
+                
+                for pr in &prs {
+                    self.upsert_pr_from_github(pr, repo, provider)?;
+                }
+                
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("🔀 Synced {} GitHub pull requests for {}", count, repo.name);
+                Ok(count)
+            }
+            "gitlab" => {
+                let mrs = Database::fetch_gitlab_merge_requests(provider, repo, prs_since.as_deref()).await?;
+                let count = mrs.len() as u32;
+                
+                for mr in &mrs {
+                    self.upsert_mr_from_gitlab(mr, repo, provider)?;
+                }
+                
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("🔀 Synced {} GitLab merge requests for {}", count, repo.name);
+                Ok(count)
+            }
+            _ => Err(format!("Unsupported provider type: {}", provider.provider_type).into())
+        }
+    }
+    
+    async fn sync_repository_workflows(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+        let workflows_since = repo.last_workflows_sync.map(|dt| dt.to_rfc3339());
+        
+        match provider.provider_type.as_str() {
+            "github" => {
+                let workflows = Database::fetch_github_workflows(provider, repo, workflows_since.as_deref()).await?;
+                let count = workflows.len() as u32;
+                
+                for workflow in &workflows {
+                    self.upsert_workflow_from_github(workflow, repo, provider)?;
+                }
+                
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("⚙️ Synced {} GitHub workflows for {}", count, repo.name);
+                Ok(count)
+            }
+            "gitlab" => {
+                let pipelines = self.fetch_gitlab_pipelines(provider, repo, workflows_since.as_deref()).await?;
+                let count = pipelines.len() as u32;
+                
+                for pipeline in &pipelines {
+                    self.upsert_pipeline_from_gitlab(pipeline, repo, provider)?;
+                }
+                
+                let now = Utc::now().to_rfc3339();
+                let success_status_id = self.get_sync_status_id("success")?;
+                self.conn.execute(
+                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo.id],
+                )?;
+                
+                info!("⚙️ Synced {} GitLab pipelines for {}", count, repo.name);
+                Ok(count)
+            }
+            _ => Err(format!("Unsupported provider type: {}", provider.provider_type).into())
+        }
     }
 
     pub async fn sync_all_providers(&mut self) -> Result<(), String> {
@@ -1694,10 +1768,6 @@ impl Database {
         }
     }
 
-    pub fn is_sync_in_progress(&self) -> bool {
-        self.sync_in_progress.load(Ordering::Acquire)
-    }
-
     // Helper functions for lookup tables
     pub fn get_provider_type_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let id: i64 = self.conn.query_row(
@@ -1767,6 +1837,34 @@ impl Database {
         Ok(id)
     }
 
+    pub fn update_repository_sync_timestamp(&mut self, repo_id: i64, sync_type: &str, status: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let now = Utc::now().to_rfc3339();
+        let success_status_id = self.get_sync_status_id(status)?;
+        
+        match sync_type {
+            "issues" => {
+                self.conn.execute(
+                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo_id],
+                )?;
+            },
+            "pull_requests" => {
+                self.conn.execute(
+                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo_id],
+                )?;
+            },
+            "workflows" => {
+                self.conn.execute(
+                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    rusqlite::params![&now, success_status_id, &now, repo_id],
+                )?;
+            },
+            _ => return Err(format!("Invalid sync type: {}", sync_type).into())
+        }
+        Ok(())
+    }
+
     pub fn sync_repository(&mut self, repository_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Syncing repository: {}", repository_id);
         
@@ -1829,52 +1927,72 @@ impl Database {
     }
 
     // API client methods
-    async fn fetch_github_issues(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubIssue>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn fetch_github_issues(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubIssue>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
-        // Note: GitHub's /issues endpoint returns both issues and pull requests
-        // We filter out PRs after receiving the response
-        let mut params = vec![("state", "all"), ("per_page", "100")];
-        if let Some(since_time) = since {
-            params.push(("since", since_time));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/repos/{}/issues", provider.base_url, repo.full_name);
-        let request = client
-            .get(&url)
-            .header("Authorization", format!("token {}", token))
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+        let mut all_issues = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            // Note: GitHub's /issues endpoint returns both issues and pull requests
+            // We filter out PRs after receiving the response
+            let per_page_str = per_page.to_string();
+            let page_str = page.to_string();
+            let mut params = vec![("state", "all"), ("per_page", &per_page_str), ("page", &page_str)];
+            if let Some(since_time) = since {
+                params.push(("since", since_time));
+            }
             
-        let status_code = response.status().as_u16();
-        
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitHub API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("Authorization", format!("token {}", token))
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+                
+            let status_code = response.status().as_u16();
+            
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitHub API error: {}", response.status()).into());
+            }
+            
+            let page_items: Vec<GitHubIssue> = response.json().await?;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_items.len() < per_page;
+            
+            // Filter out pull requests (GitHub's /issues endpoint returns both issues and PRs)
+            let page_issues: Vec<GitHubIssue> = page_items.into_iter()
+                .filter(|item| item.pull_request.is_none())
+                .collect();
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_issues.len());
+            all_issues.extend(page_issues);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
-        
-        let all_items: Vec<GitHubIssue> = response.json().await?;
-        
-        // Filter out pull requests (GitHub's /issues endpoint returns both issues and PRs)
-        let mut issues: Vec<GitHubIssue> = all_items.into_iter()
-            .filter(|item| item.pull_request.is_none())
-            .collect();
             
         // Client-side filtering by updated_at (since GitHub API only supports created_at filtering)
         if let Some(since_time) = since {
             if let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_time) {
-                issues.retain(|issue| {
+                all_issues.retain(|issue| {
                     if let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(&issue.updated_at) {
                         updated_at > since_dt
                     } else {
@@ -1883,50 +2001,69 @@ impl Database {
                 });
             }
         }
-            
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, issues.len());
-        Ok(issues)
+        
+        info!("📝 Total GitHub issues fetched: {}", all_issues.len());
+        Ok(all_issues)
     }
     
-    async fn fetch_github_pull_requests(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubPullRequest>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn fetch_github_pull_requests(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubPullRequest>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
-        let mut params = vec![("state", "all"), ("per_page", "100")];
-        if let Some(since_time) = since {
-            params.push(("since", since_time));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/repos/{}/pulls", provider.base_url, repo.full_name);
-        let request = client
-            .get(&url)
-            .header("Authorization", format!("token {}", token))
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
-        let status_code = response.status().as_u16();
+        let mut all_prs = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            let per_page_str = per_page.to_string();
+            let page_str = page.to_string();
+            let mut params = vec![("state", "all"), ("per_page", &per_page_str), ("page", &page_str)];
+            if let Some(since_time) = since {
+                params.push(("since", since_time));
+            }
             
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitHub API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("Authorization", format!("token {}", token))
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+            let status_code = response.status().as_u16();
+                
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitHub API error: {}", response.status()).into());
+            }
+            
+            let page_prs: Vec<GitHubPullRequest> = response.json().await?;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_prs.len() < per_page;
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_prs.len());
+            all_prs.extend(page_prs);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
-        
-        let mut prs: Vec<GitHubPullRequest> = response.json().await?;
         
         // Client-side filtering by updated_at (since GitHub API only supports created_at filtering)
         if let Some(since_time) = since {
             if let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_time) {
-                prs.retain(|pr| {
+                all_prs.retain(|pr| {
                     if let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(&pr.updated_at) {
                         updated_at > since_dt
                     } else {
@@ -1936,52 +2073,69 @@ impl Database {
             }
         }
         
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, prs.len());
-        Ok(prs)
+        info!("🔀 Total GitHub pull requests fetched: {}", all_prs.len());
+        Ok(all_prs)
     }
     
-    async fn fetch_github_workflows(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubWorkflowRun>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn fetch_github_workflows(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubWorkflowRun>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
-        let mut params: Vec<(&str, &str)> = vec![("per_page", "100")];
-        let created_filter;
-        if let Some(since_time) = since {
-            created_filter = format!(">={}", since_time);
-            params.push(("created", &created_filter));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/repos/{}/actions/runs", provider.base_url, repo.full_name);
-        let request = client
-            .get(&url)
-            .header("Authorization", format!("token {}", token))
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
-        let status_code = response.status().as_u16();
+        let mut all_workflows = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            let mut params: Vec<(&str, String)> = vec![("per_page", per_page.to_string()), ("page", page.to_string())];
+            let created_filter;
+            if let Some(since_time) = since {
+                created_filter = format!(">={}", since_time);
+                params.push(("created", created_filter));
+            }
             
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitHub API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("Authorization", format!("token {}", token))
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+            let status_code = response.status().as_u16();
+                
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitHub API error: {}", response.status()).into());
+            }
+            
+            let response_data: GitHubWorkflowRunsResponse = response.json().await?;
+            let page_workflows = response_data.workflow_runs;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_workflows.len() < per_page;
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_workflows.len());
+            all_workflows.extend(page_workflows);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
-        
-        let response_data: GitHubWorkflowRunsResponse = response.json().await?;
-        let mut workflows = response_data.workflow_runs;
         
         // Client-side filtering by updated_at (since GitHub API only supports created filtering)
         if let Some(since_time) = since {
             if let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_time) {
-                workflows.retain(|workflow| {
+                all_workflows.retain(|workflow| {
                     if let Ok(updated_at) = chrono::DateTime::parse_from_rfc3339(&workflow.updated_at) {
                         updated_at > since_dt
                     } else {
@@ -1991,133 +2145,189 @@ impl Database {
             }
         }
         
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, workflows.len());
-        Ok(workflows)
+        info!("⚙️ Total GitHub workflows fetched: {}", all_workflows.len());
+        Ok(all_workflows)
     }
     
-    async fn fetch_gitlab_issues(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitLabIssue>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn fetch_gitlab_issues(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitLabIssue>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let project_id = &repo.api_id;
-        let mut params = vec![("state", "all"), ("per_page", "100")];
-        if let Some(since_time) = since {
-            params.push(("updated_after", since_time));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/projects/{}/issues", provider.base_url, project_id);
-        let request = client
-            .get(&url)
-            .header("PRIVATE-TOKEN", token)
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
-        let status_code = response.status().as_u16();
+        let mut all_issues = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            let per_page_str = per_page.to_string();
+            let page_str = page.to_string();
+            let mut params = vec![("state", "all"), ("per_page", &per_page_str), ("page", &page_str)];
+            if let Some(since_time) = since {
+                params.push(("updated_after", since_time));
+            }
             
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitLab API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("PRIVATE-TOKEN", token)
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+            let status_code = response.status().as_u16();
+                
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitLab API error: {}", response.status()).into());
+            }
+            
+            let page_issues: Vec<GitLabIssue> = response.json().await?;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_issues.len() < per_page;
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_issues.len());
+            all_issues.extend(page_issues);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
         
-        let issues: Vec<GitLabIssue> = response.json().await?;
-        
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, issues.len());
-        Ok(issues)
+        info!("📝 Total GitLab issues fetched: {}", all_issues.len());
+        Ok(all_issues)
     }
     
-    async fn fetch_gitlab_merge_requests(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitLabMergeRequest>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn fetch_gitlab_merge_requests(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitLabMergeRequest>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let project_id = &repo.api_id;
-        let mut params = vec![("state", "all"), ("per_page", "100")];
-        if let Some(since_time) = since {
-            params.push(("updated_after", since_time));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/projects/{}/merge_requests", provider.base_url, project_id);
-        let request = client
-            .get(&url)
-            .header("PRIVATE-TOKEN", token)
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
-        let status_code = response.status().as_u16();
+        let mut all_mrs = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            let per_page_str = per_page.to_string();
+            let page_str = page.to_string();
+            let mut params = vec![("state", "all"), ("per_page", &per_page_str), ("page", &page_str)];
+            if let Some(since_time) = since {
+                params.push(("updated_after", since_time));
+            }
             
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitLab API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("PRIVATE-TOKEN", token)
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+            let status_code = response.status().as_u16();
+                
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitLab API error: {}", response.status()).into());
+            }
+            
+            let page_mrs: Vec<GitLabMergeRequest> = response.json().await?;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_mrs.len() < per_page;
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_mrs.len());
+            all_mrs.extend(page_mrs);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
         
-        let mrs: Vec<GitLabMergeRequest> = response.json().await?;
-        
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, mrs.len());
-        Ok(mrs)
+        info!("🔀 Total GitLab merge requests fetched: {}", all_mrs.len());
+        Ok(all_mrs)
     }
     
     async fn fetch_gitlab_pipelines(&self, provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitLabPipeline>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let project_id = &repo.api_id;
-        let mut params = vec![("per_page", "100")];
-        if let Some(since_time) = since {
-            params.push(("updated_after", since_time));
-        }
-        
         let token = provider.token.as_ref().ok_or("No token available")?;
-        
         let url = format!("{}/projects/{}/pipelines", provider.base_url, project_id);
-        let request = client
-            .get(&url)
-            .header("PRIVATE-TOKEN", token)
-            .header("User-Agent", "GitPortal-App")
-            .query(&params);
-
-        let response = request.send().await?;
         
-        // Simple access log: Method URL Status [Count]
-        let query_string = if params.is_empty() { 
-            String::new() 
-        } else { 
-            format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
-        };
-        let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
-        let status_code = response.status().as_u16();
+        let mut all_pipelines = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+        
+        loop {
+            let per_page_str = per_page.to_string();
+            let page_str = page.to_string();
+            let mut params: Vec<(&str, &str)> = vec![("per_page", &per_page_str), ("page", &page_str)];
+            if let Some(since_time) = since {
+                params.push(("updated_after", since_time));
+            }
             
-        if !response.status().is_success() {
-            info!("GET {} {}", full_url, status_code);
-            return Err(format!("GitLab API error: {}", response.status()).into());
+            let request = client
+                .get(&url)
+                .header("PRIVATE-TOKEN", token)
+                .header("User-Agent", "GitPortal-App")
+                .query(&params);
+
+            let response = request.send().await?;
+            
+            // Simple access log: Method URL Status [Count]
+            let query_string = if params.is_empty() { 
+                String::new() 
+            } else { 
+                format!("?{}", params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")) 
+            };
+            let full_url = format!("{}{}", mask_sensitive_url(&url), query_string);
+            let status_code = response.status().as_u16();
+                
+            if !response.status().is_success() {
+                info!("GET {} {}", full_url, status_code);
+                return Err(format!("GitLab API error: {}", response.status()).into());
+            }
+            
+            let page_pipelines: Vec<GitLabPipeline> = response.json().await?;
+            
+            // If we got fewer items than per_page, this is the last page
+            let is_last_page = page_pipelines.len() < per_page;
+            
+            info!("GET {} {} [{}]", full_url, status_code, page_pipelines.len());
+            all_pipelines.extend(page_pipelines);
+            
+            if is_last_page {
+                break;
+            }
+            
+            page += 1;
         }
         
-        let pipelines: Vec<GitLabPipeline> = response.json().await?;
-        
-        // Simple access log: Method URL Status Count
-        info!("GET {} {} [{}]", full_url, status_code, pipelines.len());
-        Ok(pipelines)
+        info!("⚙️ Total GitLab pipelines fetched: {}", all_pipelines.len());
+        Ok(all_pipelines)
     }
 
     // Data insertion/update methods
-    fn upsert_issue_from_github(&mut self, github_issue: &GitHubIssue, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn upsert_issue_from_github(&mut self, github_issue: &GitHubIssue, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_id = self.get_issue_state_id(&github_issue.state)?;
         let labels_json = serde_json::to_string(&github_issue.labels.iter().map(|l| &l.name).collect::<Vec<_>>())?;
         let assignees_me = github_issue.assignees.iter().any(|a| a.login == "me"); // TODO: Replace with actual user check
@@ -2150,7 +2360,7 @@ impl Database {
         Ok(())
     }
 
-    fn upsert_pr_from_github(&mut self, github_pr: &GitHubPullRequest, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn upsert_pr_from_github(&mut self, github_pr: &GitHubPullRequest, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_id = self.get_pr_state_id(&github_pr.state)?;
         let assignees_me = github_pr.assignees.iter().any(|a| a.login == "me"); // TODO: Replace with actual user check
         
@@ -2183,7 +2393,7 @@ impl Database {
         Ok(())
     }
 
-    fn upsert_workflow_from_github(&mut self, github_workflow: &GitHubWorkflowRun, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn upsert_workflow_from_github(&mut self, github_workflow: &GitHubWorkflowRun, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let status_id = self.get_workflow_status_id(&github_workflow.status)?;
         let conclusion_id = if let Some(ref conclusion) = github_workflow.conclusion {
             self.get_workflow_conclusion_id(conclusion)?
@@ -2214,7 +2424,7 @@ impl Database {
         Ok(())
     }
 
-    fn upsert_issue_from_gitlab(&mut self, gitlab_issue: &GitLabIssue, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn upsert_issue_from_gitlab(&mut self, gitlab_issue: &GitLabIssue, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_id = self.get_issue_state_id(&gitlab_issue.state)?;
         let labels_json = serde_json::to_string(&gitlab_issue.labels)?;
         let assignees_me = gitlab_issue.assignees.iter().any(|a| a.username == "me"); // TODO: Replace with actual user check
@@ -2247,7 +2457,7 @@ impl Database {
         Ok(())
     }
 
-    fn upsert_mr_from_gitlab(&mut self, gitlab_mr: &GitLabMergeRequest, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn upsert_mr_from_gitlab(&mut self, gitlab_mr: &GitLabMergeRequest, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_id = self.get_pr_state_id(&gitlab_mr.state)?;
         let assignees_me = gitlab_mr.assignees.iter().any(|a| a.username == "me"); // TODO: Replace with actual user check
         

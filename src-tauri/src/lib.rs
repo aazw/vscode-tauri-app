@@ -274,35 +274,36 @@ async fn add_git_provider(
 #[tauri::command]
 async fn get_git_providers(db: State<'_, DatabaseState>) -> Result<Vec<GitProvider>, String> {
     log::info!("get_git_providers called");
-    let db = db.lock().unwrap();
-    match db.get_providers() {
-        Ok(providers) => {
-            log::info!("Retrieved {} providers", providers.len());
-            log::debug!("Providers: {:?}", providers.iter().map(|p| &p.name).collect::<Vec<_>>());
-            Ok(providers)
-        }
-        Err(e) => {
+    
+    // Short lock to get data and immediately release
+    let providers = {
+        let db = db.lock().unwrap();
+        db.get_providers().map_err(|e| {
             log::error!("Failed to get providers: {}", e);
-            Err(e.to_string())
-        }
-    }
+            e.to_string()
+        })?
+    }; // Lock released here
+    
+    log::info!("Retrieved {} providers", providers.len());
+    log::debug!("Providers: {:?}", providers.iter().map(|p| &p.name).collect::<Vec<_>>());
+    Ok(providers)
 }
 
 #[tauri::command]
 async fn get_all_repositories(db: State<'_, DatabaseState>) -> Result<Vec<Repository>, String> {
     log::info!("get_all_repositories called");
-    let db = db.lock().unwrap();
-    match db.get_repositories() {
-        Ok(repos) => {
-            log::info!("Retrieved {} repositories", repos.len());
-            log::debug!("Repositories: {:?}", repos.iter().map(|r| &r.name).collect::<Vec<_>>());
-            Ok(repos)
-        }
-        Err(e) => {
+    
+    let repos = {
+        let db = db.lock().unwrap();
+        db.get_repositories().map_err(|e| {
             log::error!("Failed to get repositories: {}", e);
-            Err(e.to_string())
-        }
-    }
+            e.to_string()
+        })?
+    };
+    
+    log::info!("Retrieved {} repositories", repos.len());
+    log::debug!("Repositories: {:?}", repos.iter().map(|r| &r.name).collect::<Vec<_>>());
+    Ok(repos)
 }
 
 #[tauri::command]
@@ -495,21 +496,21 @@ async fn get_issues(
     pagination: Option<PaginationParams>,
 ) -> Result<PaginatedResponse<Issue>, String> {
     log::info!("get_issues called with filters: {:?}, pagination: {:?}", filters, pagination);
-    let db = db.lock().unwrap();
-    match db.get_issues(&filters, &pagination) {
-        Ok(response) => {
-            log::info!("Retrieved {} issues (page {} of {})", 
-                response.data.len(), 
-                response.pagination.page, 
-                response.pagination.total_pages
-            );
-            Ok(response)
-        }
-        Err(e) => {
+    
+    let response = {
+        let db = db.lock().unwrap();
+        db.get_issues(&filters, &pagination).map_err(|e| {
             log::error!("Failed to get issues: {}", e);
-            Err(e.to_string())
-        }
-    }
+            e.to_string()
+        })?
+    };
+    
+    log::info!("Retrieved {} issues (page {} of {})", 
+        response.data.len(), 
+        response.pagination.page, 
+        response.pagination.total_pages
+    );
+    Ok(response)
 }
 
 #[tauri::command]
@@ -615,33 +616,354 @@ async fn sync_provider(
     db: State<'_, DatabaseState>,
     providerId: i64,
 ) -> Result<(), String> {
-    // Spawn a blocking task to handle the database operation
-    let db = db.inner().clone();
+    // Check sync lock without holding DB lock
+    {
+        let db_guard = db.lock().unwrap();
+        if db_guard.is_sync_in_progress() {
+            return Err("Sync already in progress".to_string());
+        }
+    }
     
+    // Perform sync with minimal DB locking
+    let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let mut db_guard = db.lock().unwrap();
         tokio::runtime::Handle::current().block_on(async {
-            db_guard.sync_provider(providerId).await
+            // Each database operation will acquire/release lock individually
+            sync_provider_internal(db, providerId).await
         })
     }).await
     .map_err(|e| format!("Task join error: {}", e))?
-    .map_err(|e| e.to_string())
+}
+
+// Internal sync function with fine-grained DB locking
+async fn sync_provider_internal(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider_id: i64,
+) -> Result<(), String> {
+    // 1. Set sync in progress (short lock)
+    {
+        let db_guard = db.lock().unwrap();
+        if !db_guard.try_start_sync() {
+            return Err("Sync already in progress".to_string());
+        }
+    }
+    
+    // Ensure sync lock is released on exit
+    let _sync_guard = SyncGuard::new(db.clone());
+    
+    // 2. Get provider info (short lock)
+    let provider = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_provider(provider_id).map_err(|e| format!("Failed to get provider: {}", e))?
+    };
+    
+    // 3. Validate token (no lock needed)
+    if !provider.token_valid || provider.token.is_none() {
+        return Err("Provider token is invalid or missing".to_string());
+    }
+    
+    // 4. Get repositories (short lock)
+    let repositories = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_repositories_by_provider(provider_id).map_err(|e| format!("Failed to get repositories: {}", e))?
+    };
+    
+    // 5. Sync each repository with individual DB locks
+    let mut total_synced = 0;
+    for repo in &repositories {
+        total_synced += sync_repository_with_minimal_lock(db.clone(), &provider, repo).await?;
+    }
+    
+    log::info!("✅ Provider sync completed: {} ({} items synced)", provider_id, total_synced);
+    Ok(())
+}
+
+// RAII guard to ensure sync lock is released
+struct SyncGuard {
+    db: Arc<std::sync::Mutex<Database>>,
+}
+
+impl SyncGuard {
+    fn new(db: Arc<std::sync::Mutex<Database>>) -> Self {
+        SyncGuard { db }
+    }
+}
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        let db_guard = self.db.lock().unwrap();
+        db_guard.reset_sync_lock();
+    }
+}
+
+// Sync single repository with minimal DB locking
+async fn sync_repository_with_minimal_lock(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider: &database::GitProvider,
+    repo: &database::Repository,
+) -> Result<u32, String> {
+    let provider_clone = provider.clone();
+    let repo_clone = repo.clone();
+    let db_clone = db.clone();
+    
+    // Sync each resource type individually with short-duration locks
+    let mut total_synced = 0;
+    
+    // Sync issues
+    total_synced += sync_repository_issues_external(db_clone.clone(), &provider_clone, &repo_clone).await?;
+    
+    // Sync pull requests  
+    total_synced += sync_repository_pull_requests_external(db_clone.clone(), &provider_clone, &repo_clone).await?;
+    
+    // Sync workflows
+    total_synced += sync_repository_workflows_external(db_clone.clone(), &provider_clone, &repo_clone).await?;
+    
+    Ok(total_synced)
+}
+
+// External sync functions that manage their own DB locking
+async fn sync_repository_issues_external(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider: &database::GitProvider,
+    repo: &database::Repository,
+) -> Result<u32, String> {
+    // Get issues_since with short lock
+    let issues_since = {
+        let _db_guard = db.lock().unwrap();
+        repo.last_issues_sync.map(|dt| dt.to_rfc3339())
+    };
+    
+    // Fetch and upsert based on provider type
+    let count = match provider.provider_type.as_str() {
+        "github" => {
+            // Fetch GitHub issues (no lock needed - static method)
+            let github_issues = database::Database::fetch_github_issues(provider, repo, issues_since.as_deref()).await.map_err(|e| e.to_string())?;
+            
+            let count = github_issues.len() as u32;
+            
+            // Upsert with short locks - each item gets its own lock
+            for issue in &github_issues {
+                {
+                    let mut db_guard = db.lock().unwrap();
+                    db_guard.upsert_issue_from_github(issue, repo, provider).map_err(|e| e.to_string())?;
+                } // Lock released here for each item
+            }
+            
+            count
+        },
+        "gitlab" => {
+            // Fetch GitLab issues (no lock needed - static method)
+            let gitlab_issues = database::Database::fetch_gitlab_issues(provider, repo, issues_since.as_deref()).await.map_err(|e| e.to_string())?;
+            
+            let count = gitlab_issues.len() as u32;
+            
+            // Upsert with short locks - each item gets its own lock
+            for issue in &gitlab_issues {
+                {
+                    let mut db_guard = db.lock().unwrap();
+                    db_guard.upsert_issue_from_gitlab(issue, repo, provider).map_err(|e| e.to_string())?;
+                } // Lock released here for each item
+            }
+            
+            count
+        },
+        _ => return Err(format!("Unsupported provider type: {}", provider.provider_type))
+    };
+    
+    // Update sync timestamp with short lock
+    {
+        let mut db_guard = db.lock().unwrap();
+        db_guard.update_repository_sync_timestamp(repo.id, "issues", "success").map_err(|e| e.to_string())?;
+    }
+    
+    log::info!("📝 Synced {} issues for {}", count, repo.name);
+    Ok(count)
+}
+
+async fn sync_repository_pull_requests_external(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider: &database::GitProvider,
+    repo: &database::Repository,
+) -> Result<u32, String> {
+    // Get prs_since with short lock
+    let prs_since = {
+        let _db_guard = db.lock().unwrap();
+        repo.last_pull_requests_sync.map(|dt| dt.to_rfc3339())
+    };
+    
+    // Fetch and upsert based on provider type
+    let count = match provider.provider_type.as_str() {
+        "github" => {
+            // Fetch GitHub pull requests (no lock needed - static method)
+            let github_prs = database::Database::fetch_github_pull_requests(provider, repo, prs_since.as_deref()).await.map_err(|e| e.to_string())?;
+            
+            let count = github_prs.len() as u32;
+            
+            // Upsert with short locks - each item gets its own lock
+            for pr in &github_prs {
+                {
+                    let mut db_guard = db.lock().unwrap();
+                    db_guard.upsert_pr_from_github(pr, repo, provider).map_err(|e| e.to_string())?;
+                } // Lock released here for each item
+            }
+            
+            count
+        },
+        "gitlab" => {
+            // Fetch GitLab merge requests (no lock needed - static method)
+            let gitlab_mrs = database::Database::fetch_gitlab_merge_requests(provider, repo, prs_since.as_deref()).await.map_err(|e| e.to_string())?;
+            
+            let count = gitlab_mrs.len() as u32;
+            
+            // Upsert with short locks - each item gets its own lock
+            for mr in &gitlab_mrs {
+                {
+                    let mut db_guard = db.lock().unwrap();
+                    db_guard.upsert_mr_from_gitlab(mr, repo, provider).map_err(|e| e.to_string())?;
+                } // Lock released here for each item
+            }
+            
+            count
+        },
+        _ => return Err(format!("Unsupported provider type: {}", provider.provider_type))
+    };
+    
+    // Update sync timestamp with short lock
+    {
+        let mut db_guard = db.lock().unwrap();
+        db_guard.update_repository_sync_timestamp(repo.id, "pull_requests", "success").map_err(|e| e.to_string())?;
+    }
+    
+    log::info!("🔀 Synced {} pull requests for {}", count, repo.name);
+    Ok(count)
+}
+
+async fn sync_repository_workflows_external(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider: &database::GitProvider,
+    repo: &database::Repository,
+) -> Result<u32, String> {
+    // Get workflows_since with short lock
+    let workflows_since = {
+        let _db_guard = db.lock().unwrap();
+        repo.last_workflows_sync.map(|dt| dt.to_rfc3339())
+    };
+    
+    // Fetch and upsert based on provider type
+    let count = match provider.provider_type.as_str() {
+        "github" => {
+            // Fetch GitHub workflows (no lock needed - static method)
+            let github_workflows = database::Database::fetch_github_workflows(provider, repo, workflows_since.as_deref()).await.map_err(|e| e.to_string())?;
+            
+            let count = github_workflows.len() as u32;
+            
+            // Upsert with short locks - each item gets its own lock
+            for workflow in &github_workflows {
+                {
+                    let mut db_guard = db.lock().unwrap();
+                    db_guard.upsert_workflow_from_github(workflow, repo, provider).map_err(|e| e.to_string())?;
+                } // Lock released here for each item
+            }
+            
+            count
+        },
+        _ => return Ok(0) // Skip workflows for non-GitHub providers for now
+    };
+    
+    // Update sync timestamp with short lock
+    {
+        let mut db_guard = db.lock().unwrap();
+        db_guard.update_repository_sync_timestamp(repo.id, "workflows", "success").map_err(|e| e.to_string())?;
+    }
+    
+    log::info!("⚙️ Synced {} workflows for {}", count, repo.name);
+    Ok(count)
 }
 
 #[tauri::command]
 async fn sync_all_providers(
     db: State<'_, DatabaseState>,
 ) -> Result<(), String> {
-    let db = db.inner().clone();
+    // Check sync lock without holding DB lock
+    {
+        let db_guard = db.lock().unwrap();
+        if db_guard.is_sync_in_progress() {
+            return Err("Sync already in progress".to_string());
+        }
+    }
     
+    let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let mut db_guard = db.lock().unwrap();
         tokio::runtime::Handle::current().block_on(async {
-            db_guard.sync_all_providers().await
+            sync_all_providers_internal(db).await
         })
     }).await
     .map_err(|e| format!("Task join error: {}", e))?
-    .map_err(|e| e.to_string())
+}
+
+async fn sync_all_providers_internal(
+    db: Arc<std::sync::Mutex<Database>>,
+) -> Result<(), String> {
+    // 1. Set sync in progress (short lock)
+    {
+        let db_guard = db.lock().unwrap();
+        if !db_guard.try_start_sync() {
+            return Err("Sync already in progress".to_string());
+        }
+    }
+    
+    // Ensure sync lock is released on exit
+    let _sync_guard = SyncGuard::new(db.clone());
+    
+    // 2. Get all provider IDs (short lock)
+    let provider_ids = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_providers().map_err(|e| format!("Database error: {}", e))?
+            .into_iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+    };
+    
+    // 3. Sync each provider with individual locks
+    for provider_id in provider_ids {
+        if let Err(e) = sync_provider_for_all(db.clone(), provider_id).await {
+            log::error!("❌ Failed to sync provider {}: {}", provider_id, e);
+        }
+    }
+    
+    log::info!("✅ All providers sync completed");
+    Ok(())
+}
+
+async fn sync_provider_for_all(
+    db: Arc<std::sync::Mutex<Database>>,
+    provider_id: i64,
+) -> Result<(), String> {
+    // Get provider info (short lock)
+    let provider = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_provider(provider_id).map_err(|e| format!("Failed to get provider: {}", e))?
+    };
+    
+    // Validate token (no lock needed)
+    if !provider.token_valid || provider.token.is_none() {
+        return Err("Provider token is invalid or missing".to_string());
+    }
+    
+    // Get repositories (short lock)
+    let repositories = {
+        let db_guard = db.lock().unwrap();
+        db_guard.get_repositories_by_provider(provider_id).map_err(|e| format!("Failed to get repositories: {}", e))?
+    };
+    
+    // Sync each repository with individual DB locks
+    for repo in &repositories {
+        if let Err(e) = sync_repository_with_minimal_lock(db.clone(), &provider, repo).await {
+            log::error!("❌ Failed to sync repository {}: {}", repo.name, e);
+        }
+    }
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -838,9 +1160,8 @@ async fn start_sync_scheduler(
         
         let db_clone = db.clone();
         let sync_result = tokio::task::spawn_blocking(move || {
-            let mut db_guard = db_clone.lock().unwrap();
             tokio::runtime::Handle::current().block_on(async {
-                db_guard.sync_all_providers().await
+                sync_all_providers_internal(db_clone).await
             })
         }).await;
         
