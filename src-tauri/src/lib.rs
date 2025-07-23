@@ -9,7 +9,7 @@ pub use database::{
 };
 
 #[cfg(feature = "tauri")]
-use tauri::{State, Manager};
+use tauri::{State, Manager, Emitter};
 use uuid::Uuid;
 use chrono::Utc;
 use reqwest::Client;
@@ -37,6 +37,15 @@ impl Default for SyncSettings {
 }
 
 type SyncSettingsState = std::sync::Arc<std::sync::Mutex<SyncSettings>>;
+
+// Event emission functions
+#[cfg(feature = "tauri")]
+fn emit_sync_complete(app_handle: &tauri::AppHandle, provider_id: i64) {
+    if let Err(e) = app_handle.emit("sync_complete", provider_id) {
+        log::error!("Failed to emit sync_complete event: {}", e);
+    }
+}
+
 
 // Token validation functions
 async fn validate_github_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
@@ -122,14 +131,15 @@ async fn add_git_provider(
     name: String,
     provider_type: String,
     base_url: String,
+    api_base_url: String,
     token: Option<String>,
 ) -> Result<i64, String> {
-    log::info!("add_git_provider called: name={}, type={}, url={}", name, provider_type, base_url);
+    log::info!("add_git_provider called: name={}, type={}, url={}, api_url={}", name, provider_type, base_url, api_base_url);
     
     // Check if this is a standard provider (github.com/gitlab.com) or self-hosted
     let is_standard_provider = 
-        (provider_type == "github" && base_url == "https://api.github.com") ||
-        (provider_type == "gitlab" && base_url == "https://gitlab.com/api/v4");
+        (provider_type == "github" && api_base_url == "https://api.github.com") ||
+        (provider_type == "gitlab" && api_base_url == "https://gitlab.com/api/v4");
     
     log::info!("Provider type: {} (standard: {})", provider_type, is_standard_provider);
     
@@ -141,7 +151,7 @@ async fn add_git_provider(
             
             token_valid = match provider_type.as_str() {
                 "github" => {
-                    match validate_github_token(&base_url, token_str).await {
+                    match validate_github_token(&api_base_url, token_str).await {
                         Ok(valid) => {
                             log::info!("GitHub token validation result: {}", valid);
                             valid
@@ -153,7 +163,7 @@ async fn add_git_provider(
                     }
                 }
                 "gitlab" => {
-                    match validate_gitlab_token(&base_url, token_str).await {
+                    match validate_gitlab_token(&api_base_url, token_str).await {
                         Ok(valid) => {
                             log::info!("GitLab token validation result: {}", valid);
                             valid
@@ -182,7 +192,7 @@ async fn add_git_provider(
         // For standard providers (github.com/gitlab.com), find existing provider and update token
         log::info!("Handling standard provider: searching for existing provider with base_url={}", base_url);
         
-        // Find existing provider by base_url and provider_type
+        // Find existing provider by api_base_url and provider_type
         let existing_providers = match db.get_providers() {
             Ok(providers) => providers,
             Err(e) => {
@@ -192,7 +202,7 @@ async fn add_git_provider(
         };
         
         let existing_provider = existing_providers.iter().find(|p| 
-            p.base_url == base_url && p.provider_type == provider_type
+            p.api_base_url == api_base_url && p.provider_type == provider_type
         );
         
         if let Some(existing) = existing_provider {
@@ -219,13 +229,16 @@ async fn add_git_provider(
             log::info!("No existing standard provider found, creating new one");
             
             // Create new standard provider
+            let is_initialized = token.as_ref().map_or(false, |t| !t.is_empty());
             let provider = GitProvider {
                 id: 0, // Will be set by database
                 name: name.clone(),
                 provider_type: provider_type.clone(),
                 base_url: base_url.clone(),
+                api_base_url: api_base_url.clone(),
                 token: token,
                 token_valid,
+                is_initialized,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
@@ -250,8 +263,10 @@ async fn add_git_provider(
             name: name.clone(),
             provider_type: provider_type.clone(),
             base_url: base_url.clone(),
+            api_base_url: api_base_url.clone(),
             token: token,
             token_valid,
+            is_initialized: true, // Self-hosted providers are always initialized
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -331,8 +346,9 @@ async fn add_repository(
     db: State<'_, DatabaseState>,
     providerId: i64,
     webUrl: String,
+    apiUrl: String,
 ) -> Result<i64, String> {
-    log::info!("add_repository called: provider_id={}, web_url={}", providerId, webUrl);
+    log::info!("add_repository called: provider_id={}, web_url={}, api_url={}", providerId, webUrl, apiUrl);
     
     let db_lock = db.lock().unwrap();
     let provider = db_lock.get_provider(providerId).map_err(|e| {
@@ -342,6 +358,13 @@ async fn add_repository(
     drop(db_lock);
     
     log::info!("Found provider: {}", provider.name);
+
+    // Validate that web_url matches provider's base_url
+    if !webUrl.starts_with(&provider.base_url) {
+        let error_msg = format!("Repository URL '{}' does not match provider base URL '{}'", webUrl, provider.base_url);
+        log::error!("{}", error_msg);
+        return Err(error_msg);
+    }
 
     let name = webUrl.split('/').last().unwrap_or("unknown").to_string();
     let full_name = webUrl.split('/').skip(webUrl.split('/').count() - 2).take(2).collect::<Vec<_>>().join("/");
@@ -354,6 +377,7 @@ async fn add_repository(
         name,
         full_name,
         web_url: webUrl,
+        api_base_url: apiUrl,
         description: None,
         provider_id: providerId,
         provider_name: provider.name.clone(),
@@ -364,10 +388,10 @@ async fn add_repository(
         api_created_at: Some(Utc::now()),
         api_updated_at: Some(Utc::now()),
         
-        // Resource-specific sync timestamps
-        last_issues_sync: None,
-        last_pull_requests_sync: None,
-        last_workflows_sync: None,
+        // Resource-specific sync timestamps (only updated on success)
+        last_issues_sync_success: None,
+        last_pull_requests_sync_success: None,
+        last_workflows_sync_success: None,
         
         // Resource-specific sync status
         last_issues_sync_status: None,
@@ -614,6 +638,7 @@ async fn get_workflow_stats(
 #[tauri::command]
 async fn sync_provider(
     db: State<'_, DatabaseState>,
+    app_handle: tauri::AppHandle,
     providerId: i64,
 ) -> Result<(), String> {
     // Check sync lock without holding DB lock
@@ -626,10 +651,12 @@ async fn sync_provider(
     
     // Perform sync with minimal DB locking
     let db = db.inner().clone();
+    let app_handle_clone = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         tokio::runtime::Handle::current().block_on(async {
             // Each database operation will acquire/release lock individually
-            sync_provider_internal(db, providerId).await
+            let result = sync_provider_internal(db, app_handle_clone, providerId).await;
+            result
         })
     }).await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -638,6 +665,7 @@ async fn sync_provider(
 // Internal sync function with fine-grained DB locking
 async fn sync_provider_internal(
     db: Arc<std::sync::Mutex<Database>>,
+    app_handle: tauri::AppHandle,
     provider_id: i64,
 ) -> Result<(), String> {
     // 1. Set sync in progress (short lock)
@@ -657,9 +685,9 @@ async fn sync_provider_internal(
         db_guard.get_provider(provider_id).map_err(|e| format!("Failed to get provider: {}", e))?
     };
     
-    // 3. Validate token (no lock needed)
-    if !provider.token_valid || provider.token.is_none() {
-        return Err("Provider token is invalid or missing".to_string());
+    // 3. Check if provider is initialized
+    if !provider.is_initialized {
+        return Ok(());
     }
     
     // 4. Get repositories (short lock)
@@ -675,6 +703,10 @@ async fn sync_provider_internal(
     }
     
     log::info!("✅ Provider sync completed: {} ({} items synced)", provider_id, total_synced);
+    
+    // Emit sync complete event
+    emit_sync_complete(&app_handle, provider_id);
+    
     Ok(())
 }
 
@@ -730,11 +762,11 @@ async fn sync_repository_issues_external(
     // Get issues_since with short lock
     let issues_since = {
         let _db_guard = db.lock().unwrap();
-        repo.last_issues_sync.map(|dt| dt.to_rfc3339())
+        repo.last_issues_sync_success.map(|dt| dt.to_rfc3339())
     };
     
-    // Fetch and upsert based on provider type
-    let count = match provider.provider_type.as_str() {
+    // Fetch and upsert based on provider type with error handling
+    let result = match provider.provider_type.as_str() {
         "github" => {
             // Fetch GitHub issues (no lock needed - static method)
             let github_issues = database::Database::fetch_github_issues(provider, repo, issues_since.as_deref()).await.map_err(|e| e.to_string())?;
@@ -749,7 +781,7 @@ async fn sync_repository_issues_external(
                 } // Lock released here for each item
             }
             
-            count
+            Ok(count)
         },
         "gitlab" => {
             // Fetch GitLab issues (no lock needed - static method)
@@ -765,19 +797,27 @@ async fn sync_repository_issues_external(
                 } // Lock released here for each item
             }
             
-            count
+            Ok(count)
         },
-        _ => return Err(format!("Unsupported provider type: {}", provider.provider_type))
+        _ => Err(format!("Unsupported provider type: {}", provider.provider_type))
     };
     
-    // Update sync timestamp with short lock
+    // Update sync status with short lock
     {
         let mut db_guard = db.lock().unwrap();
-        db_guard.update_repository_sync_timestamp(repo.id, "issues", "success").map_err(|e| e.to_string())?;
+        match &result {
+            Ok(count) => {
+                db_guard.update_repository_sync_timestamp(repo.id, "issues", "success").map_err(|e| e.to_string())?;
+                log::info!("📝 Synced {} issues for {}", count, repo.name);
+            },
+            Err(error) => {
+                db_guard.update_repository_sync_timestamp(repo.id, "issues", "failure").map_err(|e| e.to_string())?;
+                log::error!("❌ Failed to sync issues for {}: {}", repo.name, error);
+            }
+        }
     }
     
-    log::info!("📝 Synced {} issues for {}", count, repo.name);
-    Ok(count)
+    result
 }
 
 async fn sync_repository_pull_requests_external(
@@ -788,7 +828,7 @@ async fn sync_repository_pull_requests_external(
     // Get prs_since with short lock
     let prs_since = {
         let _db_guard = db.lock().unwrap();
-        repo.last_pull_requests_sync.map(|dt| dt.to_rfc3339())
+        repo.last_pull_requests_sync_success.map(|dt| dt.to_rfc3339())
     };
     
     // Fetch and upsert based on provider type
@@ -846,7 +886,7 @@ async fn sync_repository_workflows_external(
     // Get workflows_since with short lock
     let workflows_since = {
         let _db_guard = db.lock().unwrap();
-        repo.last_workflows_sync.map(|dt| dt.to_rfc3339())
+        repo.last_workflows_sync_success.map(|dt| dt.to_rfc3339())
     };
     
     // Fetch and upsert based on provider type
@@ -883,6 +923,7 @@ async fn sync_repository_workflows_external(
 #[tauri::command]
 async fn sync_all_providers(
     db: State<'_, DatabaseState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     // Check sync lock without holding DB lock
     {
@@ -893,9 +934,10 @@ async fn sync_all_providers(
     }
     
     let db = db.inner().clone();
+    let app_handle_clone = app_handle.clone();
     tokio::task::spawn_blocking(move || {
         tokio::runtime::Handle::current().block_on(async {
-            sync_all_providers_internal(db).await
+            sync_all_providers_internal(db, app_handle_clone).await
         })
     }).await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -903,6 +945,7 @@ async fn sync_all_providers(
 
 async fn sync_all_providers_internal(
     db: Arc<std::sync::Mutex<Database>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     // 1. Set sync in progress (short lock)
     {
@@ -915,7 +958,22 @@ async fn sync_all_providers_internal(
     // Ensure sync lock is released on exit
     let _sync_guard = SyncGuard::new(db.clone());
     
-    // 2. Get all provider IDs (short lock)
+    // 2. Create sync history record
+    let history_id = {
+        let mut db_guard = db.lock().unwrap();
+        match db_guard.create_sync_history("all_providers", None, "All Providers") {
+            Ok(id) => {
+                log::info!("📝 Created sync history record: {}", id);
+                Some(id)
+            }
+            Err(e) => {
+                log::error!("Failed to create sync history: {}", e);
+                None
+            }
+        }
+    };
+    
+    // 3. Get all provider IDs (short lock)
     let provider_ids = {
         let db_guard = db.lock().unwrap();
         db_guard.get_providers().map_err(|e| format!("Database error: {}", e))?
@@ -924,19 +982,59 @@ async fn sync_all_providers_internal(
             .collect::<Vec<_>>()
     };
     
-    // 3. Sync each provider with individual locks
+    // 4. Count valid providers and sync each one
+    let mut valid_providers = 0;
+    let mut total_errors = 0;
+    
     for provider_id in provider_ids {
-        if let Err(e) = sync_provider_for_all(db.clone(), provider_id).await {
-            log::error!("❌ Failed to sync provider {}: {}", provider_id, e);
+        // Check if provider is initialized before attempting sync
+        let is_initialized = {
+            let db_guard = db.lock().unwrap();
+            match db_guard.get_provider(provider_id) {
+                Ok(provider) => provider.is_initialized,
+                Err(_) => false,
+            }
+        };
+        
+        if is_initialized {
+            valid_providers += 1;
+            if let Err(e) = sync_provider_for_all(db.clone(), app_handle.clone(), provider_id).await {
+                log::error!("❌ Failed to sync provider {}: {}", provider_id, e);
+                total_errors += 1;
+            }
         }
     }
     
-    log::info!("✅ All providers sync completed");
+    // 5. Update sync history record
+    if let Some(history_id) = history_id {
+        let mut db_guard = db.lock().unwrap();
+        if total_errors == 0 {
+            if let Err(e) = db_guard.update_sync_history_completed(history_id, 0, valid_providers, 0) {
+                log::error!("Failed to update sync history (completed): {}", e);
+            }
+        } else {
+            let error_message = format!("Sync completed with {} errors", total_errors);
+            if let Err(e) = db_guard.update_sync_history_failed(history_id, &error_message) {
+                log::error!("Failed to update sync history (failed): {}", e);
+            }
+        }
+    }
+    
+    if valid_providers == 0 {
+        log::info!("ℹ️ No initialized providers found. Sync completed successfully.");
+    } else {
+        log::info!("✅ All providers sync completed ({} providers)", valid_providers);
+    }
+    
+    // Emit sync complete event for all providers
+    emit_sync_complete(&app_handle, -1); // -1 indicates all providers sync
+    
     Ok(())
 }
 
 async fn sync_provider_for_all(
     db: Arc<std::sync::Mutex<Database>>,
+    app_handle: tauri::AppHandle,
     provider_id: i64,
 ) -> Result<(), String> {
     // Get provider info (short lock)
@@ -945,9 +1043,9 @@ async fn sync_provider_for_all(
         db_guard.get_provider(provider_id).map_err(|e| format!("Failed to get provider: {}", e))?
     };
     
-    // Validate token (no lock needed)
-    if !provider.token_valid || provider.token.is_none() {
-        return Err("Provider token is invalid or missing".to_string());
+    // Check if provider is initialized
+    if !provider.is_initialized {
+        return Ok(());
     }
     
     // Get repositories (short lock)
@@ -963,6 +1061,9 @@ async fn sync_provider_for_all(
         }
     }
     
+    // Emit sync complete event for this provider
+    emit_sync_complete(&app_handle, provider_id);
+    
     Ok(())
 }
 
@@ -971,8 +1072,25 @@ async fn sync_repository(
     db: State<'_, DatabaseState>,
     repository_id: i64,
 ) -> Result<(), String> {
-    let mut db = db.lock().unwrap();
-    db.sync_repository(repository_id).map_err(|e| e.to_string())
+    log::info!("sync_repository called: repository_id={}", repository_id);
+    
+    // Check sync lock without holding DB lock
+    {
+        let db_guard = db.lock().unwrap();
+        if db_guard.is_sync_in_progress() {
+            return Err("Sync already in progress".to_string());
+        }
+    }
+    
+    let db_arc = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        tokio::runtime::Handle::current().block_on(async {
+            let mut db_guard = db_arc.lock().unwrap();
+            db_guard.sync_repository(repository_id).await
+        })
+    }).await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| format!("Sync error: {}", e))
 }
 
 #[allow(non_snake_case)]
@@ -1005,7 +1123,7 @@ async fn validate_provider_token(
     // Validate token based on provider type
     let is_valid = match provider.provider_type.as_str() {
         "github" => {
-            match validate_github_token(&provider.base_url, token).await {
+            match validate_github_token(&provider.api_base_url, token).await {
                 Ok(valid) => valid,
                 Err(e) => {
                     log::error!("GitHub token validation failed: {}", e);
@@ -1014,7 +1132,7 @@ async fn validate_provider_token(
             }
         }
         "gitlab" => {
-            match validate_gitlab_token(&provider.base_url, token).await {
+            match validate_gitlab_token(&provider.api_base_url, token).await {
                 Ok(valid) => valid,
                 Err(e) => {
                     log::error!("GitLab token validation failed: {}", e);
@@ -1120,6 +1238,7 @@ async fn open_external_url(url: String) -> Result<(), String> {
 async fn start_sync_scheduler(
     db: Arc<std::sync::Mutex<Database>>,
     settings: Arc<std::sync::Mutex<SyncSettings>>,
+    app_handle: tauri::AppHandle,
 ) {
     let mut interval_timer = interval(Duration::from_secs(60)); // Check every minute
     let mut last_sync_interval = 0u64;
@@ -1159,9 +1278,10 @@ async fn start_sync_scheduler(
         info!("⏰ Starting scheduled sync (interval: {}min)", sync_interval);
         
         let db_clone = db.clone();
+        let app_handle_clone = app_handle.clone();
         let sync_result = tokio::task::spawn_blocking(move || {
             tokio::runtime::Handle::current().block_on(async {
-                sync_all_providers_internal(db_clone).await
+                sync_all_providers_internal(db_clone, app_handle_clone).await
             })
         }).await;
         
@@ -1283,9 +1403,10 @@ pub fn run() {
             log::info!("🕐 Starting sync scheduler");
             let db_state_clone = db_state.clone();
             let sync_settings_clone = sync_settings.clone();
+            let app_handle_clone = app.handle().clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(start_sync_scheduler(db_state_clone, sync_settings_clone));
+                rt.block_on(start_sync_scheduler(db_state_clone, sync_settings_clone, app_handle_clone));
             });
             
                 log::info!("🎯 Application setup completed");

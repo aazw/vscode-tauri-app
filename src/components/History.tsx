@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useBackend } from "../backends/BackendProvider";
 import { SyncHistory } from "../types/AppBackend";
+import { listen } from '@tauri-apps/api/event';
 
 const History = () => {
   const [history, setHistory] = useState<SyncHistory[]>([]);
@@ -13,6 +14,24 @@ const History = () => {
 
   useEffect(() => {
     loadHistory();
+    
+    // Listen for sync complete events to refresh history
+    const setupEventListeners = async () => {
+      const unlistenSyncComplete = await listen('sync_complete', () => {
+        loadHistoryQuiet();
+      });
+
+      const unlistenSyncProgress = await listen('sync_progress', () => {
+        loadHistoryQuiet();
+      });
+
+      return () => {
+        unlistenSyncComplete();
+        unlistenSyncProgress();
+      };
+    };
+
+    setupEventListeners();
   }, []);
 
   const loadHistory = async () => {
@@ -41,6 +60,18 @@ const History = () => {
       setError(errorMessage);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadHistoryQuiet = async () => {
+    try {
+      setError(null);
+      
+      const syncHistory = await backend.getSyncHistory();
+      setHistory(syncHistory);
+    } catch (err) {
+      console.error('Failed to load sync history (quiet):', err);
+      // Don't set error for quiet refresh to avoid interrupting user
     }
   };
 
@@ -154,12 +185,6 @@ const History = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
-          <button 
-            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            onClick={loadHistory}
-          >
-            <span className="mr-2">🔄</span> Refresh
-          </button>
         </div>
         
         {/* Filter and Badges Row */}
@@ -186,11 +211,37 @@ const History = () => {
               <option value="repository">Repository</option>
             </select>
           </div>
-          <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
-            <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Total</span>
-            <span className="px-2 py-1 bg-blue-500 text-white font-semibold">
-              {filteredHistory.length}
-            </span>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Total</span>
+              <span className="px-2 py-1 bg-blue-500 text-white font-semibold">
+                {filteredHistory.length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Success</span>
+              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+                {filteredHistory.filter(item => item.status === 'completed').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Failed</span>
+              <span className="px-2 py-1 bg-red-500 text-white font-semibold">
+                {filteredHistory.filter(item => item.status === 'failed').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">In Progress</span>
+              <span className="px-2 py-1 bg-yellow-500 text-white font-semibold">
+                {filteredHistory.filter(item => item.status === 'started').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
+              <span className="px-2 py-1 bg-purple-500 text-white font-semibold">
+                {history.length}
+              </span>
+            </div>
           </div>
         </div>
       </div>

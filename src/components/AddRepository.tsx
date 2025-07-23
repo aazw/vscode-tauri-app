@@ -37,9 +37,24 @@ const AddRepository = () => {
 
     try {
       
+      const selectedProvider = providers.find(p => p.id === parseInt(formData.provider_id));
+      const webUrl = convertToWebUrl(formData.repository_url);
+      
+      // Generate repository-specific api_base_url
+      const apiBaseUrl = selectedProvider ? (() => {
+        const repoPath = webUrl.replace(selectedProvider.base_url + '/', '');
+        if (selectedProvider.provider_type === 'gitlab') {
+          const encodedPath = encodeURIComponent(repoPath);
+          return `${selectedProvider.api_base_url}/projects/${encodedPath}`;
+        } else {
+          return `${selectedProvider.api_base_url}/repos/${repoPath}`;
+        }
+      })() : webUrl;
+      
       const newRepository = {
         provider_id: parseInt(formData.provider_id),
-        web_url: convertToWebUrl(formData.repository_url),
+        web_url: webUrl,
+        api_base_url: apiBaseUrl,
       };
       
       console.log('📤 Sending repository data to backend:', newRepository);
@@ -105,14 +120,35 @@ const AddRepository = () => {
     <div className="flex flex-col h-full p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Add New Repository</h1>
-        <p className="text-gray-600 mt-1">Track a repository in your dashboard</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">Add New Repository</h1>
+            <p className="text-gray-600 mt-1">Track a repository in your dashboard</p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              type="button" 
+              className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              onClick={() => navigate("/repositories")}
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              form="add-repository-form"
+              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || !isFormValid}
+            >
+              {loading ? "Adding..." : "Add Repository"}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
         {/* Form */}
-        <div className="bg-white border-t border-b border-gray-300 max-w-2xl m-6">
-          <form onSubmit={handleSubmit} className="p-6 space-y-6">
+        <div className="bg-white border-t border-b border-gray-300 m-6">
+          <form id="add-repository-form" onSubmit={handleSubmit} className="p-6 space-y-6">
             <div>
               <label htmlFor="provider_id" className="block text-sm font-medium text-gray-700 mb-2">
                 Git Provider
@@ -179,23 +215,6 @@ const AddRepository = () => {
               </div>
             )}
 
-            <div className="flex justify-between pt-6 border-t border-gray-300">
-              <button 
-                type="button" 
-                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                onClick={() => navigate("/repositories")}
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={loading || !isFormValid}
-              >
-                {loading ? "Adding..." : "Add Repository"}
-              </button>
-            </div>
           </form>
         </div>
       </div>

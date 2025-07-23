@@ -13,8 +13,10 @@ pub struct GitProvider {
     pub name: String,
     pub provider_type: String,
     pub base_url: String,
+    pub api_base_url: String,
     pub token: Option<String>,
     pub token_valid: bool,
+    pub is_initialized: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -26,6 +28,7 @@ pub struct Repository {
     pub name: String,
     pub full_name: String,
     pub web_url: String,
+    pub api_base_url: String,
     pub description: Option<String>,
     pub provider_id: i64,
     pub provider_name: String,
@@ -36,10 +39,10 @@ pub struct Repository {
     pub api_created_at: Option<DateTime<Utc>>,
     pub api_updated_at: Option<DateTime<Utc>>,
     
-    // Resource-specific sync timestamps
-    pub last_issues_sync: Option<DateTime<Utc>>,
-    pub last_pull_requests_sync: Option<DateTime<Utc>>,
-    pub last_workflows_sync: Option<DateTime<Utc>>,
+    // Resource-specific sync timestamps (only updated on success)
+    pub last_issues_sync_success: Option<DateTime<Utc>>,
+    pub last_pull_requests_sync_success: Option<DateTime<Utc>>,
+    pub last_workflows_sync_success: Option<DateTime<Utc>>,
     
     // Resource-specific sync status
     pub last_issues_sync_status: Option<String>,
@@ -402,8 +405,8 @@ impl Database {
         debug!("📋 Fetching all providers");
         
         let mut stmt = self.conn.prepare(
-            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.token, gp.token_valid,
-                    gp.created_at, gp.updated_at
+            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
+                    gp.is_initialized, gp.created_at, gp.updated_at
              FROM git_providers gp
              JOIN provider_types pt ON gp.provider_type_id = pt.id
              ORDER BY gp.name"
@@ -415,10 +418,12 @@ impl Database {
                 name: row.get(1)?,
                 provider_type: row.get(2)?,
                 base_url: row.get(3)?,
-                token: row.get(4)?,
-                token_valid: row.get::<_, bool>(5).unwrap_or(false),
-                created_at: row.get::<_, String>(6)?.parse().unwrap_or_else(|_| Utc::now()),
-                updated_at: row.get::<_, String>(7)?.parse().unwrap_or_else(|_| Utc::now()),
+                api_base_url: row.get(4)?,
+                token: row.get(5)?,
+                token_valid: row.get::<_, bool>(6).unwrap_or(false),
+                is_initialized: row.get::<_, bool>(7).unwrap_or(false),
+                created_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+                updated_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
             })
         })?;
 
@@ -430,6 +435,10 @@ impl Database {
         info!("📊 Found {} providers", providers.len());
         if !providers.is_empty() {
             debug!("Provider names: {:?}", providers.iter().map(|p| &p.name).collect::<Vec<_>>());
+            for provider in &providers {
+                debug!("Provider {}: is_initialized={}, token_valid={}, has_token={}", 
+                    provider.name, provider.is_initialized, provider.token_valid, provider.token.is_some());
+            }
         }
         Ok(providers)
     }
@@ -438,8 +447,8 @@ impl Database {
         debug!("🔍 Fetching provider: {}", provider_id);
         
         let provider = self.conn.query_row(
-            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.token, gp.token_valid,
-                    gp.created_at, gp.updated_at
+            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
+                    gp.is_initialized, gp.created_at, gp.updated_at
              FROM git_providers gp
              JOIN provider_types pt ON gp.provider_type_id = pt.id
              WHERE gp.id = ?",
@@ -450,10 +459,12 @@ impl Database {
                     name: row.get(1)?,
                     provider_type: row.get(2)?,
                     base_url: row.get(3)?,
-                    token: row.get(4)?,
-                    token_valid: row.get::<_, bool>(5).unwrap_or(false),
-                    created_at: row.get::<_, String>(6)?.parse().unwrap_or_else(|_| Utc::now()),
-                    updated_at: row.get::<_, String>(7)?.parse().unwrap_or_else(|_| Utc::now()),
+                    api_base_url: row.get(4)?,
+                    token: row.get(5)?,
+                    token_valid: row.get::<_, bool>(6).unwrap_or(false),
+                    is_initialized: row.get::<_, bool>(7).unwrap_or(false),
+                    created_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+                    updated_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
                 })
             }
         )?;
@@ -508,9 +519,9 @@ impl Database {
         
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
-                    r.web_url, r.is_private, r.language, r.last_activity, 
+                    r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at,
-                    r.last_issues_sync, r.last_pull_requests_sync, r.last_workflows_sync,
+                    r.last_issues_sync_success, r.last_pull_requests_sync_success, r.last_workflows_sync_success,
                     ss_issues.code, ss_prs.code, ss_workflows.code,
                     r.created_at, r.updated_at,
                     p.name as provider_name, pt.code as provider_type
@@ -532,44 +543,45 @@ impl Database {
                 description: row.get(4)?,
                 provider_id: row.get(5)?,
                 web_url: row.get(6)?,
-                is_private: row.get(7)?,
-                language: row.get(8)?,
-                last_activity: match row.get::<_, Option<String>>(9)? {
+                api_base_url: row.get(7)?,
+                is_private: row.get(8)?,
+                language: row.get(9)?,
+                last_activity: match row.get::<_, Option<String>>(10)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_created_at: match row.get::<_, Option<String>>(10)? {
+                api_created_at: match row.get::<_, Option<String>>(11)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_updated_at: match row.get::<_, Option<String>>(11)? {
+                api_updated_at: match row.get::<_, Option<String>>(12)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
                 
-                // Resource-specific sync timestamps
-                last_issues_sync: match row.get::<_, Option<String>>(12)? {
+                // Resource-specific sync timestamps (only updated on success)
+                last_issues_sync_success: match row.get::<_, Option<String>>(13)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                last_pull_requests_sync: match row.get::<_, Option<String>>(13)? {
+                last_pull_requests_sync_success: match row.get::<_, Option<String>>(14)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                last_workflows_sync: match row.get::<_, Option<String>>(14)? {
+                last_workflows_sync_success: match row.get::<_, Option<String>>(15)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
                 
                 // Resource-specific sync status
-                last_issues_sync_status: row.get(15)?,
-                last_pull_requests_sync_status: row.get(16)?,
-                last_workflows_sync_status: row.get(17)?,
+                last_issues_sync_status: row.get(16)?,
+                last_pull_requests_sync_status: row.get(17)?,
+                last_workflows_sync_status: row.get(18)?,
                 
-                created_at: row.get::<_, String>(18)?.parse().unwrap_or_else(|_| Utc::now()),
-                updated_at: row.get::<_, String>(19)?.parse().unwrap_or_else(|_| Utc::now()),
-                provider_name: row.get::<_, Option<String>>(20)?.unwrap_or_else(|| "Unknown".to_string()),
-                provider_type: row.get::<_, Option<String>>(21)?.unwrap_or_else(|| "unknown".to_string()),
+                created_at: row.get::<_, String>(19)?.parse().unwrap_or_else(|_| Utc::now()),
+                updated_at: row.get::<_, String>(20)?.parse().unwrap_or_else(|_| Utc::now()),
+                provider_name: row.get::<_, Option<String>>(21)?.unwrap_or_else(|| "Unknown".to_string()),
+                provider_type: row.get::<_, Option<String>>(22)?.unwrap_or_else(|| "unknown".to_string()),
             })
         })?;
 
@@ -590,9 +602,9 @@ impl Database {
         
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
-                    r.web_url, r.is_private, r.language, r.last_activity, 
+                    r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at,
-                    r.last_issues_sync, r.last_pull_requests_sync, r.last_workflows_sync,
+                    r.last_issues_sync_success, r.last_pull_requests_sync_success, r.last_workflows_sync_success,
                     ss_issues.code, ss_prs.code, ss_workflows.code,
                     r.created_at, r.updated_at,
                     p.name as provider_name, pt.code as provider_type
@@ -615,44 +627,45 @@ impl Database {
                 description: row.get(4)?,
                 provider_id: row.get(5)?,
                 web_url: row.get(6)?,
-                is_private: row.get(7)?,
-                language: row.get(8)?,
-                last_activity: match row.get::<_, Option<String>>(9)? {
+                api_base_url: row.get(7)?,
+                is_private: row.get(8)?,
+                language: row.get(9)?,
+                last_activity: match row.get::<_, Option<String>>(10)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_created_at: match row.get::<_, Option<String>>(10)? {
+                api_created_at: match row.get::<_, Option<String>>(11)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_updated_at: match row.get::<_, Option<String>>(11)? {
+                api_updated_at: match row.get::<_, Option<String>>(12)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
                 
-                // Resource-specific sync timestamps
-                last_issues_sync: match row.get::<_, Option<String>>(12)? {
+                // Resource-specific sync timestamps (only updated on success)
+                last_issues_sync_success: match row.get::<_, Option<String>>(13)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                last_pull_requests_sync: match row.get::<_, Option<String>>(13)? {
+                last_pull_requests_sync_success: match row.get::<_, Option<String>>(14)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                last_workflows_sync: match row.get::<_, Option<String>>(14)? {
+                last_workflows_sync_success: match row.get::<_, Option<String>>(15)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
                 
                 // Resource-specific sync status
-                last_issues_sync_status: row.get(15)?,
-                last_pull_requests_sync_status: row.get(16)?,
-                last_workflows_sync_status: row.get(17)?,
+                last_issues_sync_status: row.get(16)?,
+                last_pull_requests_sync_status: row.get(17)?,
+                last_workflows_sync_status: row.get(18)?,
                 
-                created_at: row.get::<_, String>(18)?.parse().unwrap_or_else(|_| Utc::now()),
-                updated_at: row.get::<_, String>(19)?.parse().unwrap_or_else(|_| Utc::now()),
-                provider_name: row.get::<_, Option<String>>(20)?.unwrap_or_else(|| "Unknown".to_string()),
-                provider_type: row.get::<_, Option<String>>(21)?.unwrap_or_else(|| "unknown".to_string()),
+                created_at: row.get::<_, String>(19)?.parse().unwrap_or_else(|_| Utc::now()),
+                updated_at: row.get::<_, String>(20)?.parse().unwrap_or_else(|_| Utc::now()),
+                provider_name: row.get::<_, Option<String>>(21)?.unwrap_or_else(|| "Unknown".to_string()),
+                provider_type: row.get::<_, Option<String>>(22)?.unwrap_or_else(|| "unknown".to_string()),
             })
         })?;
 
@@ -670,10 +683,11 @@ impl Database {
         
         let repository = self.conn.query_row(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
-                    r.web_url, r.is_private, r.language, r.last_activity, 
+                    r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at, r.created_at, r.updated_at,
                     p.name as provider_name, pt.code as provider_type,
                     r.last_issues_sync, r.last_pull_requests_sync, r.last_workflows_sync,
+                    r.last_issues_sync_success, r.last_pull_requests_sync_success, r.last_workflows_sync_success,
                     iss.code as last_issues_sync_status, prs.code as last_pull_requests_sync_status, wfs.code as last_workflows_sync_status
              FROM repositories r
              LEFT JOIN git_providers p ON r.provider_id = p.id
@@ -692,17 +706,18 @@ impl Database {
                     description: row.get(4)?,
                     provider_id: row.get(5)?,
                     web_url: row.get(6)?,
-                    is_private: row.get(7)?,
-                    language: row.get(8)?,
-                    last_activity: match row.get::<_, Option<String>>(9)? {
+                    api_base_url: row.get(7)?,
+                    is_private: row.get(8)?,
+                    language: row.get(9)?,
+                    last_activity: match row.get::<_, Option<String>>(10)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
-                    api_created_at: match row.get::<_, Option<String>>(10)? {
+                    api_created_at: match row.get::<_, Option<String>>(11)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
-                    api_updated_at: match row.get::<_, Option<String>>(11)? {
+                    api_updated_at: match row.get::<_, Option<String>>(12)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
@@ -711,16 +726,16 @@ impl Database {
                     provider_name: row.get::<_, Option<String>>(14)?.unwrap_or_else(|| "Unknown".to_string()),
                     provider_type: row.get::<_, Option<String>>(15)?.unwrap_or_else(|| "unknown".to_string()),
                     
-                    // Resource-specific sync timestamps
-                    last_issues_sync: match row.get::<_, Option<String>>(16)? {
+                    // Resource-specific sync timestamps (only updated on success)
+                    last_issues_sync_success: match row.get::<_, Option<String>>(16)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
-                    last_pull_requests_sync: match row.get::<_, Option<String>>(17)? {
+                    last_pull_requests_sync_success: match row.get::<_, Option<String>>(17)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
-                    last_workflows_sync: match row.get::<_, Option<String>>(18)? {
+                    last_workflows_sync_success: match row.get::<_, Option<String>>(18)? {
                         Some(s) => s.parse().ok(),
                         None => None,
                     },
@@ -743,9 +758,9 @@ impl Database {
         
         let result = self.conn.execute(
             "INSERT INTO repositories 
-             (provider_id, api_id, name, full_name, description, web_url, is_private, 
+             (provider_id, api_id, name, full_name, description, web_url, api_base_url, is_private, 
               language, last_activity, api_created_at, api_updated_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 &repository.provider_id,
                 &repository.api_id,
@@ -753,6 +768,7 @@ impl Database {
                 &repository.full_name,
                 &repository.description,
                 &repository.web_url,
+                &repository.api_base_url,
                 &repository.is_private,
                 &repository.language,
                 repository.last_activity.as_ref().map(|dt| dt.to_rfc3339()),
@@ -900,11 +916,11 @@ impl Database {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_created_at: match row.get::<_, Option<String>>(10)? {
+                api_created_at: match row.get::<_, Option<String>>(11)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
-                api_updated_at: match row.get::<_, Option<String>>(11)? {
+                api_updated_at: match row.get::<_, Option<String>>(12)? {
                     Some(s) => s.parse().ok(),
                     None => None,
                 },
@@ -1012,7 +1028,7 @@ impl Database {
              FROM pull_requests pr
              JOIN repositories r ON pr.repository_id = r.id
              JOIN git_providers p ON r.provider_id = p.id
-             JOIN pr_states ps ON pr.state_id = ps.id"
+             JOIN pull_request_states ps ON pr.state_id = ps.id"
         );
         
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1119,7 +1135,7 @@ impl Database {
                      FROM pull_requests pr
                      JOIN repositories r ON pr.repository_id = r.id
                      JOIN git_providers p ON r.provider_id = p.id
-                     JOIN pr_states ps ON pr.state_id = ps.id
+                     JOIN pull_request_states ps ON pr.state_id = ps.id
                      WHERE pr.id = ?";
         
         self.conn.query_row(query, [pr_id], |row| {
@@ -1151,7 +1167,7 @@ impl Database {
             "FROM pull_requests pr
              JOIN repositories r ON pr.repository_id = r.id
              JOIN git_providers p ON r.provider_id = p.id
-             JOIN pr_states ps ON pr.state_id = ps.id"
+             JOIN pull_request_states ps ON pr.state_id = ps.id"
         );
         
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1447,7 +1463,7 @@ impl Database {
         for repo in &repositories {
             info!("🔄 Syncing repository: {} ({})", repo.name, repo.id);
             info!("📅 Repository sync times - Issues: {:?}, PRs: {:?}, Workflows: {:?}", 
-                  repo.last_issues_sync, repo.last_pull_requests_sync, repo.last_workflows_sync);
+                  repo.last_issues_sync_success, repo.last_pull_requests_sync_success, repo.last_workflows_sync_success);
             
             match self.sync_repository_data(&provider, repo).await {
                 Ok(synced_count) => {
@@ -1543,7 +1559,7 @@ impl Database {
 
     // Split resource sync methods for minimal DB locking
     async fn sync_repository_issues(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        let issues_since = repo.last_issues_sync.map(|dt| dt.to_rfc3339());
+        let issues_since = repo.last_issues_sync_success.map(|dt| dt.to_rfc3339());
         
         match provider.provider_type.as_str() {
             "github" => {
@@ -1559,7 +1575,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1577,7 +1593,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1589,7 +1605,7 @@ impl Database {
     }
     
     async fn sync_repository_pull_requests(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        let prs_since = repo.last_pull_requests_sync.map(|dt| dt.to_rfc3339());
+        let prs_since = repo.last_pull_requests_sync_success.map(|dt| dt.to_rfc3339());
         
         match provider.provider_type.as_str() {
             "github" => {
@@ -1603,7 +1619,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1621,7 +1637,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1633,7 +1649,7 @@ impl Database {
     }
     
     async fn sync_repository_workflows(&mut self, provider: &GitProvider, repo: &Repository) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        let workflows_since = repo.last_workflows_sync.map(|dt| dt.to_rfc3339());
+        let workflows_since = repo.last_workflows_sync_success.map(|dt| dt.to_rfc3339());
         
         match provider.provider_type.as_str() {
             "github" => {
@@ -1647,7 +1663,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1665,7 +1681,7 @@ impl Database {
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
                 self.conn.execute(
-                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
                 
@@ -1789,7 +1805,7 @@ impl Database {
 
     pub fn get_pr_state_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let id: i64 = self.conn.query_row(
-            "SELECT id FROM pr_states WHERE code = ?",
+            "SELECT id FROM pull_request_states WHERE code = ?",
             [code],
             |row| row.get(0)
         )?;
@@ -1844,19 +1860,19 @@ impl Database {
         match sync_type {
             "issues" => {
                 self.conn.execute(
-                    "UPDATE repositories SET last_issues_sync = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
             },
             "pull_requests" => {
                 self.conn.execute(
-                    "UPDATE repositories SET last_pull_requests_sync = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
             },
             "workflows" => {
                 self.conn.execute(
-                    "UPDATE repositories SET last_workflows_sync = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
             },
@@ -1865,7 +1881,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn sync_repository(&mut self, repository_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn sync_repository(&mut self, repository_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Syncing repository: {}", repository_id);
         
         // Update the repository's last_activity and updated_at timestamp
@@ -1893,10 +1909,11 @@ impl Database {
         };
         
         self.conn.execute(
-            "UPDATE git_providers SET token = ?, token_valid = ?, updated_at = ? WHERE id = ?",
+            "UPDATE git_providers SET token = ?, token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
             rusqlite::params![
                 token,
                 token_valid,
+                token_valid, // is_initialized should be true when token is valid
                 Utc::now().to_rfc3339(),
                 provider_id
             ],
@@ -1914,9 +1931,10 @@ impl Database {
         
         // Update token validation status but don't update sync timestamps
         self.conn.execute(
-            "UPDATE git_providers SET token_valid = ?, updated_at = ? WHERE id = ?",
+            "UPDATE git_providers SET token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
             rusqlite::params![
                 is_valid,
+                is_valid, // is_initialized should match token validity
                 Utc::now().to_rfc3339(),
                 provider_id
             ],
@@ -1930,7 +1948,7 @@ impl Database {
     pub async fn fetch_github_issues(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubIssue>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/repos/{}/issues", provider.base_url, repo.full_name);
+        let url = format!("{}/repos/{}/issues", provider.api_base_url, repo.full_name);
         
         let mut all_issues = Vec::new();
         let mut page = 1;
@@ -2009,7 +2027,7 @@ impl Database {
     pub async fn fetch_github_pull_requests(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubPullRequest>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/repos/{}/pulls", provider.base_url, repo.full_name);
+        let url = format!("{}/repos/{}/pulls", provider.api_base_url, repo.full_name);
         
         let mut all_prs = Vec::new();
         let mut page = 1;
@@ -2080,7 +2098,7 @@ impl Database {
     pub async fn fetch_github_workflows(provider: &GitProvider, repo: &Repository, since: Option<&str>) -> Result<Vec<GitHubWorkflowRun>, Box<dyn std::error::Error + Send + Sync>> {
         let client = Client::new();
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/repos/{}/actions/runs", provider.base_url, repo.full_name);
+        let url = format!("{}/repos/{}/actions/runs", provider.api_base_url, repo.full_name);
         
         let mut all_workflows = Vec::new();
         let mut page = 1;
@@ -2153,7 +2171,7 @@ impl Database {
         let client = Client::new();
         let project_id = &repo.api_id;
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/projects/{}/issues", provider.base_url, project_id);
+        let url = format!("{}/projects/{}/issues", provider.api_base_url, project_id);
         
         let mut all_issues = Vec::new();
         let mut page = 1;
@@ -2212,7 +2230,7 @@ impl Database {
         let client = Client::new();
         let project_id = &repo.api_id;
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/projects/{}/merge_requests", provider.base_url, project_id);
+        let url = format!("{}/projects/{}/merge_requests", provider.api_base_url, project_id);
         
         let mut all_mrs = Vec::new();
         let mut page = 1;
@@ -2271,7 +2289,7 @@ impl Database {
         let client = Client::new();
         let project_id = &repo.api_id;
         let token = provider.token.as_ref().ok_or("No token available")?;
-        let url = format!("{}/projects/{}/pipelines", provider.base_url, project_id);
+        let url = format!("{}/projects/{}/pipelines", provider.api_base_url, project_id);
         
         let mut all_pipelines = Vec::new();
         let mut page = 1;

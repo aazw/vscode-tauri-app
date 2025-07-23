@@ -42,9 +42,20 @@ const Providers = () => {
       const providerList = await backend.getProviders();
       setProviders(providerList);
       
+      console.log('📊 Provider details:');
+      providerList.forEach(provider => {
+        console.log(`  ${provider.name}: initialized=${provider.is_initialized}, token_valid=${provider.token_valid}, has_token=${!!provider.token}`);
+      });
+      
       // Use actual token_valid values from providers
       const statuses: { [key: number]: 'valid' | 'invalid' | 'checking' } = {};
       providerList.forEach(provider => {
+        if (!provider.is_initialized) {
+          // For uninitialized providers, don't set any status
+          // This will be handled by the UI separately
+          return;
+        }
+        
         if (provider.token) {
           statuses[provider.id] = provider.token_valid ? 'valid' : 'invalid';
         } else {
@@ -83,12 +94,60 @@ const Providers = () => {
 
 
   const getUrlAccessStatus = (provider: GitProvider) => {
+    // Check if provider is initialized first
+    if (!provider.is_initialized) {
+      return { icon: "⏸️", color: "text-gray-500", title: "Provider not initialized (no token configured)" };
+    }
+    
     // Mock URL access check based on token status
     const status = tokenStatuses[provider.id];
     if (status === 'valid') return { icon: "✅", color: "text-green-600", title: "URL accessible" };
     if (status === 'invalid') return { icon: "❌", color: "text-red-600", title: "URL access failed" };
     if (status === 'checking') return { icon: "🔄", color: "text-yellow-600", title: "Checking access..." };
     return { icon: "❓", color: "text-gray-400", title: "Access not tested" };
+  };
+
+  const getProviderStatus = (provider: GitProvider) => {
+    if (!provider.is_initialized) {
+      return { 
+        text: "Not initialized", 
+        color: "text-gray-500", 
+        bgColor: "bg-gray-100",
+        description: "Token not configured"
+      };
+    }
+    
+    const status = tokenStatuses[provider.id];
+    if (status === 'valid') {
+      return { 
+        text: "Ready", 
+        color: "text-green-600", 
+        bgColor: "bg-green-100",
+        description: "Token valid and ready to sync"
+      };
+    }
+    if (status === 'invalid') {
+      return { 
+        text: "Token invalid", 
+        color: "text-red-600", 
+        bgColor: "bg-red-100",
+        description: "Token validation failed"
+      };
+    }
+    if (status === 'checking') {
+      return { 
+        text: "Checking", 
+        color: "text-yellow-600", 
+        bgColor: "bg-yellow-100",
+        description: "Validating token..."
+      };
+    }
+    return { 
+      text: "Unknown", 
+      color: "text-gray-500", 
+      bgColor: "bg-gray-100",
+      description: "Status unknown"
+    };
   };
 
   const handleUpdateToken = async (providerId: number, token: string) => {
@@ -117,7 +176,12 @@ const Providers = () => {
       // Update local state
       setProviders(providers.map(provider => 
         provider.id === providerId 
-          ? { ...provider, updated_at: new Date().toISOString() }
+          ? { 
+              ...provider, 
+              token: token || null,
+              is_initialized: token !== null && token.length > 0,
+              updated_at: new Date().toISOString() 
+            }
           : provider
       ));
       
@@ -221,14 +285,17 @@ const Providers = () => {
 
   const handleSyncProvider = async (providerId: number) => {
     try {
+      console.log(`🎯 Sync button clicked for provider: ${providerId}`);
       setSyncingProviders(prev => new Set(prev).add(providerId));
       setError(null);
       
       console.log(`🔄 Starting sync for provider: ${providerId}`);
+      console.log(`📞 Calling backend.syncProvider(${providerId})...`);
       await backend.syncProvider(providerId);
       console.log(`✅ Sync completed for provider: ${providerId}`);
       
       // Refresh providers after sync
+      console.log(`🔄 Refreshing providers after sync...`);
       await loadProviders();
     } catch (error) {
       console.error('Failed to sync provider:', error);
@@ -318,7 +385,7 @@ const Providers = () => {
         </div>
         
         {/* Badges Row */}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
           <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
             <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Total</span>
             <span className="px-2 py-1 bg-blue-500 text-white font-semibold">
@@ -327,6 +394,12 @@ const Providers = () => {
                 provider.provider_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 provider.base_url.toLowerCase().includes(searchTerm.toLowerCase())
               ).length}
+            </span>
+          </div>
+          <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+            <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
+            <span className="px-2 py-1 bg-orange-500 text-white font-semibold">
+              {providers.length}
             </span>
           </div>
         </div>
@@ -365,13 +438,25 @@ const Providers = () => {
                   <div className="absolute right-0 mt-1 w-36 bg-white border border-gray-200 rounded-md shadow-lg z-10">
                     <button
                       onClick={() => {
-                        handleSyncProvider(provider.id);
-                        setOpenMenuId(null);
+                        const isDisabled = syncingProviders.has(provider.id) || !provider.is_initialized || tokenStatuses[provider.id] !== 'valid';
+                        console.log(`🔘 Sync button clicked for provider ${provider.id}:`, {
+                          isDisabled,
+                          isSyncing: syncingProviders.has(provider.id),
+                          isInitialized: provider.is_initialized,
+                          tokenStatus: tokenStatuses[provider.id]
+                        });
+                        if (!isDisabled) {
+                          handleSyncProvider(provider.id);
+                          setOpenMenuId(null);
+                        } else {
+                          console.log('❌ Sync button is disabled');
+                        }
                       }}
-                      disabled={syncingProviders.has(provider.id) || tokenStatuses[provider.id] !== 'valid'}
+                      disabled={syncingProviders.has(provider.id) || !provider.is_initialized || tokenStatuses[provider.id] !== 'valid'}
                       className="w-full px-3 py-2 text-left text-sm text-blue-600 hover:bg-blue-50 focus:outline-none disabled:text-gray-400 disabled:hover:bg-gray-50"
                     >
-                      {syncingProviders.has(provider.id) ? '🔄 Syncing...' : '🔄 Sync Now'}
+                      {syncingProviders.has(provider.id) ? '🔄 Syncing...' : 
+                       !provider.is_initialized ? '⏸️ Not initialized' : '🔄 Sync Now'}
                     </button>
                     <button
                       onClick={() => {
@@ -407,6 +492,15 @@ const Providers = () => {
                   title={getUrlAccessStatus(provider).title}
                 >
                   {getUrlAccessStatus(provider).icon}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">Status:</span>
+                <span 
+                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getProviderStatus(provider).bgColor} ${getProviderStatus(provider).color}`}
+                  title={getProviderStatus(provider).description}
+                >
+                  {getProviderStatus(provider).text}
                 </span>
               </div>
             </div>

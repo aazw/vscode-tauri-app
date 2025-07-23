@@ -3,8 +3,10 @@ export interface GitProvider {
   name: string;
   provider_type: string;
   base_url: string;
+  api_base_url: string;
   token: string | null;
   token_valid: boolean;
+  is_initialized: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -15,6 +17,7 @@ export interface Repository {
   name: string;
   full_name: string;
   web_url: string;
+  api_base_url: string;
   description: string | null;
   provider_id: number;
   provider_name: string;
@@ -25,15 +28,15 @@ export interface Repository {
   api_created_at: string | null;
   api_updated_at: string | null;
   
-  // Resource-specific sync timestamps
-  last_issues_sync: string | null;
-  last_pull_requests_sync: string | null;
-  last_workflows_sync: string | null;
+  // Resource-specific sync timestamps (only updated on success)
+  last_issues_sync_success: string | null;
+  last_pull_requests_sync_success: string | null;
+  last_workflows_sync_success: string | null;
   
-  // Resource-specific sync status
-  last_issues_sync_status: 'success' | 'failure' | 'in_progress' | null;
-  last_pull_requests_sync_status: 'success' | 'failure' | 'in_progress' | null;
-  last_workflows_sync_status: 'success' | 'failure' | 'in_progress' | null;
+  // Resource-specific sync status (success/failure only, no in_progress)
+  last_issues_sync_status: 'success' | 'failure' | null;
+  last_pull_requests_sync_status: 'success' | 'failure' | null;
+  last_workflows_sync_status: 'success' | 'failure' | null;
   
   created_at: string;
   updated_at: string;
@@ -161,12 +164,14 @@ export interface CreateProviderRequest {
   name: string;
   provider_type: string;
   base_url: string;
+  api_base_url: string;
   token: string | null;
 }
 
 export interface CreateRepositoryRequest {
   provider_id: number;
   web_url: string;
+  api_base_url: string;
 }
 
 export interface SyncSettings {

@@ -9,8 +9,10 @@ CREATE TABLE git_providers (
     name TEXT NOT NULL,
     provider_type_id INTEGER NOT NULL,
     base_url TEXT NOT NULL,
+    api_base_url TEXT NOT NULL,
     token TEXT,
     token_valid BOOLEAN DEFAULT FALSE,
+    is_initialized BOOLEAN DEFAULT FALSE,
 
     FOREIGN KEY (provider_type_id) REFERENCES provider_types(id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
@@ -30,14 +32,15 @@ CREATE TABLE repositories (
     full_name TEXT NOT NULL,
     description TEXT,
     web_url TEXT NOT NULL,
+    api_base_url TEXT NOT NULL,
     is_private BOOLEAN NOT NULL DEFAULT FALSE,
     language TEXT,
     last_activity TIMESTAMP,
     
     -- Resource-specific sync timestamps
-    last_issues_sync TIMESTAMP,
-    last_pull_requests_sync TIMESTAMP,
-    last_workflows_sync TIMESTAMP,
+    last_issues_sync_success TIMESTAMP,
+    last_pull_requests_sync_success TIMESTAMP,
+    last_workflows_sync_success TIMESTAMP,
     
     -- Resource-specific sync status
     last_issues_sync_status_id INTEGER,
@@ -99,7 +102,7 @@ CREATE TABLE pull_requests (
     url TEXT NOT NULL,
     
     FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (state_id) REFERENCES pr_states(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (state_id) REFERENCES pull_request_states(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE(repository_id, number)
 );
 
@@ -123,4 +126,30 @@ CREATE TABLE workflow_runs (
     FOREIGN KEY (status_id) REFERENCES workflow_statuses(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     FOREIGN KEY (conclusion_id) REFERENCES workflow_conclusions(id) ON DELETE SET NULL ON UPDATE CASCADE,
     UNIQUE(repository_id, api_id)
+);
+
+-- 同期履歴テーブル
+CREATE TABLE sync_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Sync details
+    sync_type TEXT NOT NULL, -- 'provider', 'all_providers', 'repository'
+    target_id INTEGER, -- provider_id or repository_id (null for all_providers)
+    target_name TEXT NOT NULL, -- provider name, repository name, or 'All Providers'
+    
+    -- Sync status
+    status TEXT NOT NULL, -- 'started', 'completed', 'failed'
+    error_message TEXT,
+    
+    -- Sync metrics
+    items_synced INTEGER DEFAULT 0,
+    repositories_synced INTEGER DEFAULT 0,
+    errors_count INTEGER DEFAULT 0,
+    
+    -- Timing
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    duration_seconds INTEGER -- calculated duration
 );

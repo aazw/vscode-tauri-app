@@ -13,6 +13,7 @@ const Workflows = () => {
   const [repositoryFilter, setRepositoryFilter] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("");
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -41,12 +42,12 @@ const Workflows = () => {
       filters.repository = repositoryFilter;
     }
     
-    if (searchQuery.trim()) {
-      filters.search = searchQuery.trim();
+    if (debouncedSearchQuery.trim()) {
+      filters.search = debouncedSearchQuery.trim();
     }
     
     return filters;
-  }, [statusFilter, providerFilter, repositoryFilter, searchQuery]);
+  }, [statusFilter, providerFilter, repositoryFilter, debouncedSearchQuery]);
 
   const loadWorkflows = useCallback(async (page: number = 1, append: boolean = false) => {
     try {
@@ -87,6 +88,15 @@ const Workflows = () => {
       loadWorkflows(nextPage, true);
     }
   }, [currentPage, hasMore, loadingMore, loadWorkflows]);
+
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -148,20 +158,22 @@ const Workflows = () => {
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    setCurrentPage(1);
+    // Don't reset currentPage here - let debounced search handle it
   };
 
   // Get unique providers and repositories from loaded data
   const providers = [...new Set(allWorkflows.map(workflow => workflow.provider))].sort();
   const repositories = [...new Set(allWorkflows.map(workflow => workflow.repository))].sort();
 
-  const getStatusIcon = (status: string, conclusion: string) => {
-    if (status === "in_progress") return "🟡";
+  const getStatusLabel = (status: string, conclusion: string) => {
+    if (status === "in_progress") {
+      return { label: "In Progress", className: "bg-yellow-200 text-yellow-800" };
+    }
     switch (conclusion) {
-      case "success": return "✅";
-      case "failure": return "❌";
-      case "cancelled": return "⭕";
-      default: return "❓";
+      case "success": return { label: "Success", className: "bg-green-200 text-green-800" };
+      case "failure": return { label: "Failed", className: "bg-red-200 text-red-800" };
+      case "cancelled": return { label: "Canceled", className: "bg-gray-200 text-gray-800" };
+      default: return { label: "Unknown", className: "bg-gray-200 text-gray-800" };
     }
   };
 
@@ -213,8 +225,32 @@ const Workflows = () => {
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
-              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+              <span className="px-2 py-1 bg-orange-500 text-white font-semibold">
                 {allWorkflows.length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Success</span>
+              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+                {allWorkflows.filter(wf => wf.conclusion === 'success').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Failed</span>
+              <span className="px-2 py-1 bg-red-500 text-white font-semibold">
+                {allWorkflows.filter(wf => wf.conclusion === 'failure').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Cancelled</span>
+              <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
+                {allWorkflows.filter(wf => wf.conclusion === 'cancelled').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">In Progress</span>
+              <span className="px-2 py-1 bg-yellow-500 text-white font-semibold">
+                {allWorkflows.filter(wf => wf.status === 'in_progress').length}
               </span>
             </div>
           </div>
@@ -275,7 +311,6 @@ const Workflows = () => {
             >
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-sm">{getStatusIcon(workflow.status, workflow.conclusion || '')}</span>
                   <span 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -285,25 +320,18 @@ const Workflows = () => {
                   >
                     {workflow.name}
                   </span>
-                  <span className={`px-2 py-1 text-xs rounded ${
-                    workflow.status === 'in_progress' ? 'bg-yellow-200 text-yellow-800' :
-                    workflow.conclusion === 'success' ? 'bg-green-200 text-green-800' :
-                    workflow.conclusion === 'failure' ? 'bg-red-200 text-red-800' :
-                    workflow.conclusion === 'cancelled' ? 'bg-gray-200 text-gray-800' :
-                    'bg-gray-200 text-gray-800'
-                  }`}>
-                    {workflow.status === 'in_progress' ? 'In Progress' :
-                     workflow.conclusion === 'success' ? 'Success' :
-                     workflow.conclusion === 'failure' ? 'Failure' :
-                     workflow.conclusion === 'cancelled' ? 'Cancelled' :
-                     workflow.status}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-1 text-xs rounded ${getStatusLabel(workflow.status, workflow.conclusion || '').className}`}>
+                    {getStatusLabel(workflow.status, workflow.conclusion || '').label}
                   </span>
                 </div>
-                <span className="text-xs text-gray-500 font-mono ml-2">#{workflow.id}</span>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="font-medium truncate">{workflow.provider} / {workflow.repository}</span>
+              <div className="flex items-center justify-between mb-1 text-xs text-gray-600">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium">{workflow.provider}</span>
+                  <span className="font-medium truncate">{workflow.repository}</span>
+                  <span className="text-gray-500 font-mono">#{workflow.api_id}</span>
                 </div>
                 <span className="text-xs text-gray-500 shrink-0">{getRelativeTime(workflow.api_created_at || '')}</span>
               </div>

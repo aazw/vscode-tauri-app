@@ -13,6 +13,7 @@ const Issues = () => {
   const [repositoryFilter, setRepositoryFilter] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("");
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -38,12 +39,12 @@ const Issues = () => {
       filters.repository = repositoryFilter;
     }
     
-    if (searchQuery.trim()) {
-      filters.search = searchQuery.trim();
+    if (debouncedSearchQuery.trim()) {
+      filters.search = debouncedSearchQuery.trim();
     }
     
     return filters;
-  }, [issueFilter, providerFilter, repositoryFilter, searchQuery]);
+  }, [issueFilter, providerFilter, repositoryFilter, debouncedSearchQuery]);
 
   const loadIssues = useCallback(async (page: number = 1, append: boolean = false) => {
     try {
@@ -84,6 +85,15 @@ const Issues = () => {
       loadIssues(nextPage, true);
     }
   }, [currentPage, hasMore, loadingMore, loadIssues]);
+
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -144,7 +154,7 @@ const Issues = () => {
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    setCurrentPage(1);
+    // Don't reset currentPage here - let debounced search handle it
   };
 
   // Get unique providers
@@ -154,13 +164,14 @@ const Issues = () => {
   const repositories = [...new Set(allIssues.map(issue => issue.repository))].sort();
 
 
-  const getStateIcon = (state: string) => {
+  const getStatusLabel = (state: string) => {
     switch (state) {
-      case "open": return "🟢";
-      case "closed": return "🔴";
-      default: return "❓";
+      case "open": return { label: "Open", className: "bg-green-200 text-green-800" };
+      case "closed": return { label: "Closed", className: "bg-red-200 text-red-800" };
+      default: return { label: "Unknown", className: "bg-gray-200 text-gray-800" };
     }
   };
+
 
   if (loading) {
     return (
@@ -210,8 +221,20 @@ const Issues = () => {
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
-              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+              <span className="px-2 py-1 bg-orange-500 text-white font-semibold">
                 {allIssues.length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Open</span>
+              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+                {allIssues.filter(issue => issue.state === 'open').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Closed</span>
+              <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
+                {allIssues.filter(issue => issue.state === 'closed').length}
               </span>
             </div>
           </div>
@@ -270,7 +293,6 @@ const Issues = () => {
             >
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-sm">{getStateIcon(issue.state)}</span>
                   <span 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -280,14 +302,19 @@ const Issues = () => {
                   >
                     {issue.title}
                   </span>
+                  <span className="shrink-0 text-xs text-gray-600">by {issue.author}</span>
                 </div>
-                <span className="text-xs text-gray-500 font-mono ml-2">#{issue.number}</span>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-1 text-xs rounded ${getStatusLabel(issue.state).className}`}>
+                    {getStatusLabel(issue.state).label}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="font-medium truncate">{issue.provider} / {issue.repository}</span>
-                  <span className="shrink-0">by {issue.author}</span>
-                  {issue.assigned_to_me && <span className="shrink-0">→ Assigned</span>}
+              <div className="flex items-center justify-between mb-1 text-xs text-gray-600">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium">{issue.provider}</span>
+                  <span className="font-medium truncate">{issue.repository}</span>
+                  <span className="text-gray-500 font-mono">#{issue.number}</span>
                 </div>
                 <span className="text-xs text-gray-500 shrink-0">{getRelativeTime(issue.api_created_at || '')}</span>
               </div>

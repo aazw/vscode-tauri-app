@@ -13,6 +13,7 @@ const PullRequests = () => {
   const [repositoryFilter, setRepositoryFilter] = useState<string>("all");
   const [showFilters, setShowFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("");
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -38,12 +39,12 @@ const PullRequests = () => {
       filters.repository = repositoryFilter;
     }
     
-    if (searchQuery.trim()) {
-      filters.search = searchQuery.trim();
+    if (debouncedSearchQuery.trim()) {
+      filters.search = debouncedSearchQuery.trim();
     }
     
     return filters;
-  }, [prFilter, providerFilter, repositoryFilter, searchQuery]);
+  }, [prFilter, providerFilter, repositoryFilter, debouncedSearchQuery]);
 
   const loadPullRequests = useCallback(async (page: number = 1, append: boolean = false) => {
     try {
@@ -84,6 +85,15 @@ const PullRequests = () => {
       loadPullRequests(nextPage, true);
     }
   }, [currentPage, hasMore, loadingMore, loadPullRequests]);
+
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -144,19 +154,19 @@ const PullRequests = () => {
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    setCurrentPage(1);
+    // Don't reset currentPage here - let debounced search handle it
   };
 
   // Get unique providers and repositories from loaded data
   const providers = [...new Set(allPullRequests.map(pr => pr.provider))].sort();
   const repositories = [...new Set(allPullRequests.map(pr => pr.repository))].sort();
 
-  const getStateIcon = (state: string) => {
+  const getStatusLabel = (state: string) => {
     switch (state) {
-      case "open": return "🟢";
-      case "merged": return "🟣";
-      case "closed": return "🔴";
-      default: return "❓";
+      case "open": return { label: "Open", className: "bg-green-200 text-green-800" };
+      case "merged": return { label: "Merged", className: "bg-indigo-200 text-indigo-800" };
+      case "closed": return { label: "Closed", className: "bg-red-200 text-red-800" };
+      default: return { label: "Unknown", className: "bg-gray-200 text-gray-800" };
     }
   };
 
@@ -208,8 +218,26 @@ const PullRequests = () => {
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
-              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+              <span className="px-2 py-1 bg-orange-500 text-white font-semibold">
                 {allPullRequests.length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Open</span>
+              <span className="px-2 py-1 bg-green-500 text-white font-semibold">
+                {allPullRequests.filter(pr => pr.state === 'open').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Merged</span>
+              <span className="px-2 py-1 bg-indigo-500 text-white font-semibold">
+                {allPullRequests.filter(pr => pr.state === 'merged').length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Closed</span>
+              <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
+                {allPullRequests.filter(pr => pr.state === 'closed').length}
               </span>
             </div>
           </div>
@@ -268,7 +296,6 @@ const PullRequests = () => {
             >
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-sm">{getStateIcon(pr.state)}</span>
                   <span 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -278,15 +305,20 @@ const PullRequests = () => {
                   >
                     {pr.title}
                   </span>
+                  <span className="shrink-0 text-xs text-gray-600">by {pr.author}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-1 text-xs rounded ${getStatusLabel(pr.state).className}`}>
+                    {getStatusLabel(pr.state).label}
+                  </span>
                   {pr.draft && <span className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded">Draft</span>}
                 </div>
-                <span className="text-xs text-gray-500 font-mono ml-2">#{pr.number}</span>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="font-medium truncate">{pr.provider} / {pr.repository}</span>
-                  <span className="shrink-0">by {pr.author}</span>
-                  {pr.assigned_to_me && <span className="shrink-0">→ Assigned</span>}
+              <div className="flex items-center justify-between mb-1 text-xs text-gray-600">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium">{pr.provider}</span>
+                  <span className="font-medium truncate">{pr.repository}</span>
+                  <span className="text-gray-500 font-mono">#{pr.number}</span>
                 </div>
                 <span className="text-xs text-gray-500 shrink-0">{getRelativeTime(pr.api_created_at || '')}</span>
               </div>

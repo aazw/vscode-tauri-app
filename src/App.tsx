@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { listen } from '@tauri-apps/api/event';
 import Providers from "./components/Providers";
 import AddProvider from "./components/AddProvider";
 import AddRepository from "./components/AddRepository";
@@ -48,8 +49,31 @@ function AppContent() {
 
   useEffect(() => {
     loadStats();
-    const interval = setInterval(loadStats, 30000); // Refresh every 30 seconds
-    return () => clearInterval(interval);
+    
+    // Listen for sync complete events
+    const setupEventListeners = async () => {
+      const unlistenSyncComplete = await listen('sync_complete', (event) => {
+        console.log('Sync completed for provider:', event.payload);
+        loadStats(); // Reload stats when sync completes
+      });
+
+      const unlistenSyncProgress = await listen('sync_progress', (event) => {
+        console.log('Sync progress:', event.payload);
+      });
+
+      const unlistenStatsUpdate = await listen('stats_update', (event) => {
+        console.log('Stats updated:', event.payload);
+        setStats(event.payload as any);
+      });
+
+      return () => {
+        unlistenSyncComplete();
+        unlistenSyncProgress();
+        unlistenStatsUpdate();
+      };
+    };
+
+    setupEventListeners();
   }, [backend, loadStats]);
 
   const getCurrentView = (): "dashboard" | "repositories" | "providers" | "issues" | "pull_requests" | "workflows" | "history" | "settings" => {

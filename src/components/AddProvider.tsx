@@ -9,6 +9,7 @@ const AddProvider = () => {
     name: "",
     provider_type: "github",
     base_url: "",
+    api_base_url: "",
     token: "",
   });
   const [loading, setLoading] = useState(false);
@@ -18,6 +19,13 @@ const AddProvider = () => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // Validate required fields
+    if (!formData.api_base_url.trim()) {
+      setError("API Base URL is required");
+      setLoading(false);
+      return;
+    }
 
     try {
       // Check if this is a standard provider (github.com/gitlab.com) or self-hosted
@@ -29,6 +37,7 @@ const AddProvider = () => {
         name: formData.name,
         provider_type: formData.provider_type,
         base_url: formData.base_url,
+        api_base_url: formData.api_base_url,
         token: formData.token || null,
       });
 
@@ -49,31 +58,59 @@ const AddProvider = () => {
       [name]: value
     }));
 
-    // Auto-populate base URL based on provider type
+    // Auto-populate base URL and api_base_url based on provider type
     if (name === "provider_type") {
       const baseUrls: { [key: string]: string } = {
+        github: "https://github.com",
+        gitlab: "https://gitlab.com",
+      };
+      const apiBaseUrls: { [key: string]: string } = {
         github: "https://api.github.com",
         gitlab: "https://gitlab.com/api/v4",
       };
       setFormData(prev => ({
         ...prev,
-        base_url: baseUrls[value] || ""
+        base_url: baseUrls[value] || "",
+        api_base_url: apiBaseUrls[value] || ""
       }));
     }
   };
 
 
   return (
-    <div className="flex flex-col min-h-full p-6 overflow-y-auto">
+    <div className="flex flex-col h-full p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Add New Provider</h1>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">Add New Provider</h1>
+            <p className="text-gray-600 mt-1">Add a new Git provider to your dashboard</p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              type="button" 
+              className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              onClick={() => navigate("/providers")}
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              form="add-provider-form"
+              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || !formData.name || !formData.base_url || !formData.api_base_url}
+            >
+              {loading ? "Processing..." : "Add Provider"}
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="flex-1">
+      <div className="flex-1 overflow-auto">
         {/* Error Message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg shadow-sm">
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg shadow-sm max-w-2xl m-6">
             <div className="flex">
               <div className="flex-shrink-0">
                 <svg className="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -91,8 +128,8 @@ const AddProvider = () => {
         )}
 
         {/* Form */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl">
-          <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="bg-white border-t border-b border-gray-300 m-6">
+          <form id="add-provider-form" onSubmit={handleSubmit} className="p-6 space-y-6">
             <div>
               <label htmlFor="provider_type" className="block text-sm font-medium text-gray-700 mb-2">
                 Provider Type
@@ -128,7 +165,7 @@ const AddProvider = () => {
 
             <div>
               <label htmlFor="base_url" className="block text-sm font-medium text-gray-700 mb-2">
-                Base URL
+                Base URL (Web Access)
               </label>
               <input
                 type="url"
@@ -136,12 +173,34 @@ const AddProvider = () => {
                 name="base_url"
                 value={formData.base_url}
                 onChange={handleInputChange}
-                placeholder="https://api.github.com"
+                placeholder="https://github.com"
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 required
               />
               <p className="mt-2 text-xs text-gray-500">
+                For GitHub Enterprise: https://your-domain.com<br/>
+                For GitLab self-hosted: https://your-domain.com
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="api_base_url" className="block text-sm font-medium text-gray-700 mb-2">
+                API Base URL
+              </label>
+              <input
+                type="url"
+                id="api_base_url"
+                name="api_base_url"
+                value={formData.api_base_url}
+                onChange={handleInputChange}
+                placeholder="https://api.github.com"
+                required
+                className="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                For GitHub: https://api.github.com<br/>
                 For GitHub Enterprise: https://your-domain.com/api/v3<br/>
+                For GitLab: https://gitlab.com/api/v4<br/>
                 For GitLab self-hosted: https://your-domain.com/api/v4
               </p>
             </div>
@@ -164,23 +223,6 @@ const AddProvider = () => {
               </p>
             </div>
 
-            <div className="flex justify-between pt-4 border-t border-gray-200">
-              <button 
-                type="button" 
-                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                onClick={() => navigate("/providers")}
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={loading || !formData.name || !formData.base_url}
-              >
-                {loading ? "Processing..." : "Add Provider"}
-              </button>
-            </div>
           </form>
         </div>
       </div>

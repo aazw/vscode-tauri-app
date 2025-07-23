@@ -40,7 +40,7 @@
 | name | TEXT NOT NULL | 表示名 |
 | description | TEXT | 状態の説明 |
 
-#### pr_states
+#### pull_request_states
 プルリクエストの状態の値を保存します。
 
 | カラム | 型 | 説明 |
@@ -142,7 +142,7 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
 | created_at | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | レコード作成タイムスタンプ(管理用カラム) | - | - |
 | updated_at | TIMESTAMP DEFAULT CURRENT_TIMESTAMP | レコード更新タイムスタンプ(管理用カラム) | - | - |
 | repository_id | INTEGER NOT NULL | リポジトリ参照（repositories への外部キー） | - (repositories.id で解決) | - (repositories.id で解決) |
-| state_id | INTEGER NOT NULL | プルリクエストの状態（pr_states への外部キー） | `state` + `merged` | `state` |
+| state_id | INTEGER NOT NULL | プルリクエストの状態（pull_request_states への外部キー） | `state` + `merged` | `state` |
 | api_id | TEXT NOT NULL | API での ID | `id` | `id` |
 | api_created_at | TIMESTAMP | API での作成日時 | `created_at` | `created_at` |
 | api_updated_at | TIMESTAMP | API での更新日時 | `updated_at` | `updated_at` |
@@ -313,7 +313,7 @@ Git プロバイダー設定（GitHub、GitLab など）を保存します。
       - (1, 'open', 'Open', 'Issue is open')
       - (2, 'closed', 'Closed', 'Issue is closed')
       
-      **pr_states**:
+      **pull_request_states**:
       - (1, 'open', 'Open', 'Pull request is open')
       - (2, 'closed', 'Closed', 'Pull request is closed')
       - (3, 'merged', 'Merged', 'Pull request is merged')

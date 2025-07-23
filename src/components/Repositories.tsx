@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useBackend } from "../backends/BackendProvider";
 import { Repository, GitProvider } from "../types/AppBackend";
 import { getRelativeTime } from "../utils/timeHelper";
+import { listen } from '@tauri-apps/api/event';
 
 const Repositories = () => {
   const navigate = useNavigate();
@@ -24,6 +25,26 @@ const Repositories = () => {
 
   useEffect(() => {
     loadData();
+  }, [backend]);
+
+  // Listen for sync complete events to refresh data
+  useEffect(() => {
+    const setupEventListeners = async () => {
+      const unlistenSyncComplete = await listen('sync_complete', () => {
+        loadData();
+      });
+
+      const unlistenSyncProgress = await listen('sync_progress', () => {
+        // Optionally refresh on progress updates
+      });
+
+      return () => {
+        unlistenSyncComplete();
+        unlistenSyncProgress();
+      };
+    };
+
+    setupEventListeners();
   }, [backend]);
 
   // Close menu when clicking outside
@@ -60,19 +81,25 @@ const Repositories = () => {
 
 
   const toggleMenu = (repoId: number) => {
+    console.log('📋 Menu toggle clicked for repository:', repoId, 'Current openMenuId:', openMenuId);
     setOpenMenuId(openMenuId === repoId ? null : repoId);
   };
 
   const handleDeleteRepo = async (repoId: number) => {
+    console.log('🗑️ Delete button clicked for repository:', repoId);
     if (window.confirm("Are you sure you want to delete this repository?")) {
       try {
+        console.log('🔄 Calling backend.deleteRepository...');
         await backend.deleteRepository(repoId);
+        console.log('✅ Repository deleted successfully');
         setRepositories(repositories.filter(repo => repo.id !== repoId));
         setOpenMenuId(null);
       } catch (err) {
-        console.error('Failed to delete repository:', err);
+        console.error('❌ Failed to delete repository:', err);
         setError('Failed to delete repository');
       }
+    } else {
+      console.log('❌ Delete cancelled by user');
     }
   };
 
@@ -82,45 +109,55 @@ const Repositories = () => {
   };
 
   const getLastSyncInfo = (repo: Repository) => {
+    // Get success timestamps (only updated on successful sync)
     const syncTimes = [
-      repo.last_issues_sync,
-      repo.last_pull_requests_sync,
-      repo.last_workflows_sync
+      repo.last_issues_sync_success,
+      repo.last_pull_requests_sync_success,
+      repo.last_workflows_sync_success
     ].filter(Boolean) as string[];
 
     if (syncTimes.length === 0) {
       return { text: "Never synced", color: "text-gray-500", time: null };
     }
 
-    // Find the most recent sync time
+    // Find the most recent successful sync time
     const mostRecentTime = syncTimes.reduce((latest, current) => {
       return new Date(current) > new Date(latest) ? current : latest;
     });
 
-    // Check if any sync is in progress
-    const hasInProgress = [
+    // Check sync statuses (no more in_progress status)
+    const statuses = [
       repo.last_issues_sync_status,
       repo.last_pull_requests_sync_status,
       repo.last_workflows_sync_status
-    ].includes('in_progress');
+    ].filter(Boolean);
 
-    if (hasInProgress) {
-      return { text: "Syncing...", color: "text-yellow-600", time: mostRecentTime };
+    // Count failures and successes
+    const failureCount = statuses.filter(status => status === 'failure').length;
+    const successCount = statuses.filter(status => status === 'success').length;
+    const totalCount = statuses.length;
+
+    if (failureCount === 0 && successCount > 0) {
+      // All successful
+      return { text: getRelativeTime(mostRecentTime), color: "text-green-600", time: mostRecentTime };
+    } else if (failureCount > 0 && successCount > 0) {
+      // Partial failure
+      return { 
+        text: `${getRelativeTime(mostRecentTime)} (${failureCount} errors)`, 
+        color: "text-orange-600", 
+        time: mostRecentTime 
+      };
+    } else if (failureCount === totalCount) {
+      // All failed
+      return { 
+        text: `${getRelativeTime(mostRecentTime)} (all failed)`, 
+        color: "text-red-600", 
+        time: mostRecentTime 
+      };
+    } else {
+      // Default case - show most recent time
+      return { text: getRelativeTime(mostRecentTime), color: "text-gray-600", time: mostRecentTime };
     }
-
-    // Check if any sync failed
-    const hasFailure = [
-      repo.last_issues_sync_status,
-      repo.last_pull_requests_sync_status,
-      repo.last_workflows_sync_status
-    ].includes('failure');
-
-    if (hasFailure) {
-      return { text: getRelativeTime(mostRecentTime), color: "text-red-600", time: mostRecentTime };
-    }
-
-    // All successful
-    return { text: getRelativeTime(mostRecentTime), color: "text-green-600", time: mostRecentTime };
   };
 
   const filteredRepositories = repositories
@@ -233,6 +270,12 @@ const Repositories = () => {
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Total</span>
               <span className="px-2 py-1 bg-blue-500 text-white font-semibold">
                 {filteredRepositories.length}
+              </span>
+            </div>
+            <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
+              <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Loaded</span>
+              <span className="px-2 py-1 bg-orange-500 text-white font-semibold">
+                {repositories.length}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">

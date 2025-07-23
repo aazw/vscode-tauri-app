@@ -22,7 +22,7 @@ CREATE TABLE issue_states (
     description TEXT
 );
 
-CREATE TABLE pr_states (
+CREATE TABLE pull_request_states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
@@ -51,14 +51,13 @@ INSERT INTO provider_types (id, code, name, description) VALUES
 
 INSERT INTO sync_statuses (id, code, name, description) VALUES
     (1, 'success', 'Success', 'Sync completed successfully'),
-    (2, 'failure', 'Failure', 'Sync failed'),
-    (3, 'in_progress', 'In Progress', 'Sync is currently running');
+    (2, 'failure', 'Failure', 'Sync failed');
 
 INSERT INTO issue_states (id, code, name, description) VALUES
     (1, 'open', 'Open', 'Issue is open'),
     (2, 'closed', 'Closed', 'Issue is closed');
 
-INSERT INTO pr_states (id, code, name, description) VALUES
+INSERT INTO pull_request_states (id, code, name, description) VALUES
     (1, 'open', 'Open', 'Pull request is open'),
     (2, 'closed', 'Closed', 'Pull request is closed'),
     (3, 'merged', 'Merged', 'Pull request is merged');

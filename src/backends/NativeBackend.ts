@@ -35,6 +35,7 @@ export class NativeBackend implements AppBackend {
       name: provider.name,
       provider_type: provider.provider_type,
       base_url: provider.base_url,
+      api_base_url: provider.api_base_url,
       token: provider.token
     });
   }
@@ -90,7 +91,8 @@ export class NativeBackend implements AppBackend {
     try {
       const result = await invoke('add_repository', {
         providerId: repository.provider_id,
-        webUrl: repository.web_url
+        webUrl: repository.web_url,
+        apiUrl: repository.api_base_url
       });
       console.log('✅ NativeBackend.addRepository successful:', result);
       return result as number;
@@ -145,7 +147,14 @@ export class NativeBackend implements AppBackend {
 
   // Sync operations
   async syncProvider(providerId: number): Promise<void> {
-    await invoke('sync_provider', { providerId: providerId });
+    console.log(`📡 NativeBackend.syncProvider called with provider ID: ${providerId}`);
+    try {
+      await invoke('sync_provider', { providerId: providerId });
+      console.log(`✅ NativeBackend.syncProvider completed for provider: ${providerId}`);
+    } catch (error) {
+      console.error(`❌ NativeBackend.syncProvider failed for provider ${providerId}:`, error);
+      throw error;
+    }
   }
 
   async syncAllProviders(): Promise<void> {

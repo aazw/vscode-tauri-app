@@ -40,9 +40,11 @@ export class MockBackend implements AppBackend {
         id: 1,
         name: "GitHub.com",
         provider_type: "github",
-        base_url: "https://api.github.com",
+        base_url: "https://github.com",
+        api_base_url: "https://api.github.com",
         token: null,
         token_valid: false,
+        is_initialized: false,
         created_at: now,
         updated_at: now,
       },
@@ -50,9 +52,11 @@ export class MockBackend implements AppBackend {
         id: 2,
         name: "GitLab.com",
         provider_type: "gitlab",
-        base_url: "https://gitlab.com/api/v4",
+        base_url: "https://gitlab.com",
+        api_base_url: "https://gitlab.com/api/v4",
         token: null,
         token_valid: false,
+        is_initialized: false,
         created_at: now,
         updated_at: now,
       }
@@ -66,6 +70,7 @@ export class MockBackend implements AppBackend {
         name: "frontend-app",
         full_name: "company/frontend-app",
         web_url: "https://github.com/company/frontend-app",
+        api_base_url: "https://api.github.com",
         description: "Main frontend application built with React and TypeScript",
         provider_id: 1,
         provider_name: "GitHub.com",
@@ -77,9 +82,9 @@ export class MockBackend implements AppBackend {
         api_updated_at: "2024-01-15T15:30:00Z",
         
         // Resource-specific sync timestamps
-        last_issues_sync: "2024-01-15T15:30:00Z",
-        last_pull_requests_sync: "2024-01-15T15:30:00Z",
-        last_workflows_sync: "2024-01-15T15:30:00Z",
+        last_issues_sync_success: "2024-01-15T15:30:00Z",
+        last_pull_requests_sync_success: "2024-01-15T15:30:00Z",
+        last_workflows_sync_success: "2024-01-15T15:30:00Z",
         
         // Resource-specific sync status
         last_issues_sync_status: 'success',
@@ -95,6 +100,7 @@ export class MockBackend implements AppBackend {
         name: "backend-api",
         full_name: "company/backend-api",
         web_url: "https://github.com/company/backend-api",
+        api_base_url: "https://api.github.com",
         description: "RESTful API server built with Node.js and Express",
         provider_id: 1,
         provider_name: "GitHub.com",
@@ -106,9 +112,9 @@ export class MockBackend implements AppBackend {
         api_updated_at: "2024-01-15T14:20:00Z",
         
         // Resource-specific sync timestamps
-        last_issues_sync: "2024-01-15T14:20:00Z",
-        last_pull_requests_sync: "2024-01-15T14:20:00Z",
-        last_workflows_sync: "2024-01-15T14:20:00Z",
+        last_issues_sync_success: "2024-01-15T14:20:00Z",
+        last_pull_requests_sync_success: "2024-01-15T14:20:00Z",
+        last_workflows_sync_success: "2024-01-15T14:20:00Z",
         
         // Resource-specific sync status
         last_issues_sync_status: 'success',
@@ -124,6 +130,7 @@ export class MockBackend implements AppBackend {
         name: "design-system",
         full_name: "company/design-system",
         web_url: "https://gitlab.com/company/design-system",
+        api_base_url: "https://gitlab.com/api/v4",
         description: "Shared component library and design tokens",
         provider_id: 2,
         provider_name: "GitLab.com",
@@ -135,9 +142,9 @@ export class MockBackend implements AppBackend {
         api_updated_at: "2024-01-15T13:45:00Z",
         
         // Resource-specific sync timestamps
-        last_issues_sync: "2024-01-15T13:45:00Z",
-        last_pull_requests_sync: "2024-01-15T13:45:00Z",
-        last_workflows_sync: "2024-01-15T13:45:00Z",
+        last_issues_sync_success: "2024-01-15T13:45:00Z",
+        last_pull_requests_sync_success: "2024-01-15T13:45:00Z",
+        last_workflows_sync_success: "2024-01-15T13:45:00Z",
         
         // Resource-specific sync status
         last_issues_sync_status: 'success',
@@ -153,6 +160,7 @@ export class MockBackend implements AppBackend {
         name: "mobile-app",
         full_name: "company/mobile-app",
         web_url: "https://github.com/company/mobile-app",
+        api_base_url: "https://api.github.com",
         description: "React Native mobile application",
         provider_id: 1,
         provider_name: "GitHub.com",
@@ -164,9 +172,9 @@ export class MockBackend implements AppBackend {
         api_updated_at: "2024-01-14T16:10:00Z",
         
         // Resource-specific sync timestamps
-        last_issues_sync: "2024-01-14T16:10:00Z",
-        last_pull_requests_sync: "2024-01-14T16:10:00Z",
-        last_workflows_sync: "2024-01-14T16:10:00Z",
+        last_issues_sync_success: "2024-01-14T16:10:00Z",
+        last_pull_requests_sync_success: "2024-01-14T16:10:00Z",
+        last_workflows_sync_success: "2024-01-14T16:10:00Z",
         
         // Resource-specific sync status
         last_issues_sync_status: 'success',
@@ -186,7 +194,7 @@ export class MockBackend implements AppBackend {
         repository_id: 1,
         number: 123,
         title: "Fix authentication bug in login form",
-        repository: "frontend-app",
+        repository: "company/frontend-app",
         provider: "GitHub.com",
         assigned_to_me: true,
         author: "jane-smith",
@@ -205,7 +213,7 @@ export class MockBackend implements AppBackend {
         repository_id: 3,
         number: 45,
         title: "Add dark mode support",
-        repository: "design-system",
+        repository: "company/design-system",
         provider: "GitLab.com",
         assigned_to_me: false,
         author: "bob-wilson",
@@ -224,7 +232,7 @@ export class MockBackend implements AppBackend {
         repository_id: 2,
         number: 87,
         title: "Update dependencies to latest versions",
-        repository: "backend-api",
+        repository: "company/backend-api",
         provider: "GitHub Enterprise",
         assigned_to_me: true,
         author: "alice-brown",
@@ -243,7 +251,7 @@ export class MockBackend implements AppBackend {
         repository_id: 2,
         number: 91,
         title: "Improve error handling in API",
-        repository: "backend-api",
+        repository: "company/backend-api",
         provider: "GitHub Enterprise",
         assigned_to_me: false,
         author: "john-doe",
@@ -266,7 +274,7 @@ export class MockBackend implements AppBackend {
         repository_id: 1,
         number: 56,
         title: "Implement user profile page",
-        repository: "frontend-app",
+        repository: "company/frontend-app",
         provider: "GitHub.com",
         assigned_to_me: true,
         author: "jane-smith",
@@ -286,7 +294,7 @@ export class MockBackend implements AppBackend {
         repository_id: 2,
         number: 78,
         title: "Add API rate limiting",
-        repository: "backend-api",
+        repository: "company/backend-api",
         provider: "GitHub Enterprise",
         assigned_to_me: false,
         author: "bob-wilson",
@@ -306,7 +314,7 @@ export class MockBackend implements AppBackend {
         repository_id: 3,
         number: 34,
         title: "Fix responsive layout issues",
-        repository: "design-system",
+        repository: "company/design-system",
         provider: "GitLab.com",
         assigned_to_me: true,
         author: "alice-brown",
@@ -326,7 +334,7 @@ export class MockBackend implements AppBackend {
         repository_id: 1,
         number: 89,
         title: "Update documentation",
-        repository: "frontend-app",
+        repository: "company/frontend-app",
         provider: "GitHub.com",
         assigned_to_me: false,
         author: "john-doe",
@@ -349,7 +357,7 @@ export class MockBackend implements AppBackend {
         api_id: "workflow-123",
         repository_id: 1,
         name: "CI/CD Pipeline",
-        repository: "frontend-app",
+        repository: "company/frontend-app",
         provider: "GitHub.com",
         status: "completed",
         conclusion: "success",
@@ -364,7 +372,7 @@ export class MockBackend implements AppBackend {
         api_id: "workflow-456",
         repository_id: 2,
         name: "Test Suite",
-        repository: "backend-api",
+        repository: "company/backend-api",
         provider: "GitHub Enterprise",
         status: "completed",
         conclusion: "failure",
@@ -379,7 +387,7 @@ export class MockBackend implements AppBackend {
         api_id: "workflow-789",
         repository_id: 3,
         name: "Deploy to Staging",
-        repository: "design-system",
+        repository: "company/design-system",
         provider: "GitLab.com",
         status: "in_progress",
         conclusion: null,
@@ -394,7 +402,7 @@ export class MockBackend implements AppBackend {
         api_id: "workflow-101",
         repository_id: 2,
         name: "Security Scan",
-        repository: "backend-api",
+        repository: "company/backend-api",
         provider: "GitHub Enterprise",
         status: "cancelled",
         conclusion: "cancelled",
@@ -409,7 +417,7 @@ export class MockBackend implements AppBackend {
         api_id: "workflow-102",
         repository_id: 4,
         name: "Build and Test",
-        repository: "mobile-app",
+        repository: "company/mobile-app",
         provider: "GitHub.com",
         status: "completed",
         conclusion: "success",
@@ -453,8 +461,10 @@ export class MockBackend implements AppBackend {
       name: provider.name,
       provider_type: provider.provider_type,
       base_url: provider.base_url,
+      api_base_url: provider.api_base_url || provider.base_url, // Use base_url if api_base_url is empty
       token: provider.token,
       token_valid: false,
+      is_initialized: true, // User-added providers are initialized
       created_at: now,
       updated_at: now,
     };
@@ -468,6 +478,7 @@ export class MockBackend implements AppBackend {
     if (provider) {
       provider.token = token;
       provider.token_valid = false;
+      provider.is_initialized = token !== null && token.length > 0;
       provider.updated_at = new Date().toISOString();
     }
   }
@@ -521,6 +532,11 @@ export class MockBackend implements AppBackend {
       throw new Error(`Provider with ID ${repository.provider_id} not found`);
     }
 
+    // Validate that web_url matches provider's base_url
+    if (!repository.web_url.startsWith(provider.base_url)) {
+      throw new Error(`Repository URL '${repository.web_url}' does not match provider base URL '${provider.base_url}'`);
+    }
+
     const now = new Date().toISOString();
     const newRepository: Repository = {
       id: this.generateId(),
@@ -528,6 +544,7 @@ export class MockBackend implements AppBackend {
       name: repository.web_url.split('/').pop() || 'unknown',
       full_name: repository.web_url.split('/').slice(-2).join('/') || 'unknown/unknown',
       web_url: repository.web_url,
+      api_base_url: repository.api_base_url,
       description: null,
       provider_id: repository.provider_id,
       provider_name: provider.name,
@@ -539,9 +556,9 @@ export class MockBackend implements AppBackend {
       api_updated_at: now,
       
       // Resource-specific sync timestamps
-      last_issues_sync: null,
-      last_pull_requests_sync: null,
-      last_workflows_sync: null,
+      last_issues_sync_success: null,
+      last_pull_requests_sync_success: null,
+      last_workflows_sync_success: null,
       
       // Resource-specific sync status
       last_issues_sync_status: null,
@@ -820,9 +837,9 @@ export class MockBackend implements AppBackend {
     const now = new Date().toISOString();
     // Update repository sync status instead of provider sync status
     this.repositories.forEach(repo => {
-      repo.last_issues_sync = now;
-      repo.last_pull_requests_sync = now;
-      repo.last_workflows_sync = now;
+      repo.last_issues_sync_success = now;
+      repo.last_pull_requests_sync_success = now;
+      repo.last_workflows_sync_success = now;
       repo.last_issues_sync_status = 'success';
       repo.last_pull_requests_sync_status = 'success';
       repo.last_workflows_sync_status = 'success';
