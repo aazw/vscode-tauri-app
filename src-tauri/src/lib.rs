@@ -186,7 +186,7 @@ async fn add_git_provider(
         }
     }
     
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     
     if is_standard_provider {
         // For standard providers (github.com/gitlab.com), find existing provider and update token
@@ -402,7 +402,7 @@ async fn add_repository(
         updated_at: Utc::now(),
     };
 
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     db.add_repository(&repo).map_err(|e| {
         log::error!("Failed to add repository to database: {}", e);
         e.to_string()
@@ -418,7 +418,7 @@ async fn delete_repository(
     repository_id: i64,
 ) -> Result<(), String> {
     log::info!("delete_repository called: repository_id={}", repository_id);
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     match db.delete_repository(repository_id) {
         Ok(_) => {
             log::info!("Successfully deleted repository: {}", repository_id);
@@ -460,7 +460,7 @@ async fn update_provider_token(
     token: Option<String>,
 ) -> Result<(), String> {
     log::info!("update_provider_token called: provider_id={}, has_token={}", providerId, token.is_some());
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     match db.update_provider_token(providerId, token.as_deref()) {
         Ok(_) => {
             log::info!("Successfully updated token for provider: {}", providerId);
@@ -480,7 +480,7 @@ async fn delete_provider(
     providerId: i64,
 ) -> Result<(), String> {
     log::info!("delete_provider called: provider_id={}", providerId);
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     match db.delete_provider(providerId) {
         Ok(_) => {
             log::info!("Successfully deleted provider: {}", providerId);
@@ -1148,7 +1148,7 @@ async fn validate_provider_token(
     
     // Update the validation status in database
     {
-        let mut db_lock = db.lock().unwrap();
+        let db_lock = db.lock().unwrap();
         if let Err(e) = db_lock.update_provider_token_validation(providerId, is_valid) {
             log::error!("Failed to update token validation status: {}", e);
         }

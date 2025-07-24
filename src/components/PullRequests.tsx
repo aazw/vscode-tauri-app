@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useBackend } from "../backends/BackendProvider";
-import { PullRequest, PullRequestFilters, PaginationParams } from "../types/AppBackend";
+import { PullRequest, PullRequestFilters, PaginationParams, PullRequestStats } from "../types/AppBackend";
 import { getRelativeTime } from "../utils/timeHelper";
 
 const PullRequests = () => {
@@ -17,6 +17,7 @@ const PullRequests = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
+  const [stats, setStats] = useState<PullRequestStats>({ total: 0, open: 0, merged: 0, closed: 0, assigned: 0 });
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   
@@ -64,6 +65,9 @@ const PullRequests = () => {
         setAllPullRequests(prev => [...prev, ...response.data]);
       } else {
         setAllPullRequests(response.data);
+        // Load stats only when loading first page or filters change
+        const statsResponse = await backend.getPullRequestStats(filters);
+        setStats(statsResponse);
       }
       
       setTotalCount(response.pagination.total);
@@ -225,19 +229,19 @@ const PullRequests = () => {
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Open</span>
               <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {allPullRequests.filter(pr => pr.state === 'open').length}
+                {stats.open}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Merged</span>
               <span className="px-2 py-1 bg-indigo-500 text-white font-semibold">
-                {allPullRequests.filter(pr => pr.state === 'merged').length}
+                {stats.merged}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Closed</span>
               <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
-                {allPullRequests.filter(pr => pr.state === 'closed').length}
+                {stats.closed}
               </span>
             </div>
           </div>

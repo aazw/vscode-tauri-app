@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useBackend } from "../backends/BackendProvider";
-import { Issue, IssueFilters, PaginationParams } from "../types/AppBackend";
+import { Issue, IssueFilters, PaginationParams, IssueStats } from "../types/AppBackend";
 import { getRelativeTime } from "../utils/timeHelper";
 
 const Issues = () => {
@@ -17,6 +17,7 @@ const Issues = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
+  const [stats, setStats] = useState<IssueStats>({ total: 0, open: 0, closed: 0, assigned: 0 });
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   
@@ -64,6 +65,9 @@ const Issues = () => {
         setAllIssues(prev => [...prev, ...response.data]);
       } else {
         setAllIssues(response.data);
+        // Load stats only when loading first page or filters change
+        const statsResponse = await backend.getIssueStats(filters);
+        setStats(statsResponse);
       }
       
       setTotalCount(response.pagination.total);
@@ -228,13 +232,13 @@ const Issues = () => {
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Open</span>
               <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {allIssues.filter(issue => issue.state === 'open').length}
+                {stats.open}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Closed</span>
               <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
-                {allIssues.filter(issue => issue.state === 'closed').length}
+                {stats.closed}
               </span>
             </div>
           </div>

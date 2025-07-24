@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useBackend } from "../backends/BackendProvider";
-import { WorkflowRun, WorkflowFilters, PaginationParams } from "../types/AppBackend";
+import { WorkflowRun, WorkflowFilters, PaginationParams, WorkflowStats } from "../types/AppBackend";
 import { getRelativeTime } from "../utils/timeHelper";
 
 const Workflows = () => {
@@ -17,6 +17,7 @@ const Workflows = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
+  const [stats, setStats] = useState<WorkflowStats>({ total: 0, success: 0, failure: 0, in_progress: 0, cancelled: 0 });
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   
@@ -67,6 +68,9 @@ const Workflows = () => {
         setAllWorkflows(prev => [...prev, ...response.data]);
       } else {
         setAllWorkflows(response.data);
+        // Load stats only when loading first page or filters change
+        const statsResponse = await backend.getWorkflowStats(filters);
+        setStats(statsResponse);
       }
       
       setTotalCount(response.pagination.total);
@@ -232,25 +236,25 @@ const Workflows = () => {
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Success</span>
               <span className="px-2 py-1 bg-green-500 text-white font-semibold">
-                {allWorkflows.filter(wf => wf.conclusion === 'success').length}
+                {stats.success}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Failed</span>
               <span className="px-2 py-1 bg-red-500 text-white font-semibold">
-                {allWorkflows.filter(wf => wf.conclusion === 'failure').length}
+                {stats.failure}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">Cancelled</span>
               <span className="px-2 py-1 bg-gray-500 text-white font-semibold">
-                {allWorkflows.filter(wf => wf.conclusion === 'cancelled').length}
+                {stats.cancelled}
               </span>
             </div>
             <div className="inline-flex items-center border border-gray-300 rounded-md overflow-hidden text-xs">
               <span className="px-2 py-1 bg-gray-100 text-gray-700 font-medium">In Progress</span>
               <span className="px-2 py-1 bg-yellow-500 text-white font-semibold">
-                {allWorkflows.filter(wf => wf.status === 'in_progress').length}
+                {stats.in_progress}
               </span>
             </div>
           </div>

@@ -6,6 +6,8 @@ use log::{info, debug, error, warn};
 use refinery::embed_migrations;
 use reqwest::Client;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GitProvider {
@@ -333,44 +335,107 @@ fn mask_sensitive_url(url: &str) -> String {
     }
 }
 
-pub struct Database {
-    conn: Connection,
-    sync_in_progress: AtomicBool,
+pub struct ConnectionPool {
+    write_conn: Arc<Mutex<Connection>>,
+    read_conns: Arc<Mutex<VecDeque<Connection>>>,
+    db_path: String,
+    max_read_conns: usize,
 }
 
-impl Database {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        info!("🗄️ Initializing SQLite database at: {:?}", path.as_ref());
+impl ConnectionPool {
+    pub fn new<P: AsRef<Path>>(path: P, max_read_conns: usize) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let db_path = path.as_ref().to_string_lossy().to_string();
         
-        let mut conn = Connection::open(path.as_ref())?;
-        debug!("✅ Database connection established");
+        // Create write connection
+        let write_conn = Connection::open(&db_path)?;
+        Self::configure_connection(&write_conn)?;
         
-        // Enable WAL mode for concurrent read/write access
-        info!("🔧 Enabling SQLite WAL mode for better concurrency");
+        // Create initial read connections
+        let mut read_conns = VecDeque::new();
+        for _ in 0..max_read_conns {
+            let read_conn = Connection::open(&db_path)?;
+            Self::configure_connection(&read_conn)?;
+            read_conns.push_back(read_conn);
+        }
+        
+        Ok(ConnectionPool {
+            write_conn: Arc::new(Mutex::new(write_conn)),
+            read_conns: Arc::new(Mutex::new(read_conns)),
+            db_path,
+            max_read_conns,
+        })
+    }
+    
+    fn configure_connection(conn: &Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // WAL mode optimization
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "wal_autocheckpoint", 1000)?;
         conn.pragma_update(None, "temp_store", "memory")?;
-        info!("✅ WAL mode enabled successfully");
+        conn.pragma_update(None, "cache_size", 10000)?;
+        conn.pragma_update(None, "mmap_size", 268435456)?; // 256MB
+        Ok(())
+    }
+    
+    pub fn get_read_conn(&self) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
+        let mut pool = self.read_conns.lock().unwrap();
+        if let Some(conn) = pool.pop_front() {
+            Ok(conn)
+        } else {
+            // Create new connection if pool is empty
+            let conn = Connection::open(&self.db_path)?;
+            Self::configure_connection(&conn)?;
+            Ok(conn)
+        }
+    }
+    
+    pub fn return_read_conn(&self, conn: Connection) {
+        let mut pool = self.read_conns.lock().unwrap();
+        if pool.len() < self.max_read_conns {
+            pool.push_back(conn);
+        }
+        // If pool is full, connection will be dropped
+    }
+    
+    pub fn get_write_conn(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.write_conn)
+    }
+}
+
+pub struct Database {
+    pool: ConnectionPool,
+    sync_in_progress: AtomicBool,
+}
+
+impl Database {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        info!("🗄️ Initializing SQLite database with connection pool at: {:?}", path.as_ref());
         
-        // Refineryを使用してマイグレーションを実行
-        info!("🚀 Running database migrations");
-        match migrations::runner().run(&mut conn) {
-            Ok(report) => {
-                info!("✅ Migrations completed successfully");
-                info!("📊 Migration report: {} migrations applied", report.applied_migrations().len());
-                for migration in report.applied_migrations() {
-                    debug!("Applied migration: {}", migration.name());
+        // First, run migrations on a temporary connection
+        {
+            let mut temp_conn = Connection::open(path.as_ref())?;
+            info!("🚀 Running database migrations");
+            match migrations::runner().run(&mut temp_conn) {
+                Ok(report) => {
+                    info!("✅ Migrations completed successfully");
+                    info!("📊 Migration report: {} migrations applied", report.applied_migrations().len());
+                    for migration in report.applied_migrations() {
+                        debug!("Applied migration: {}", migration.name());
+                    }
                 }
-            }
-            Err(e) => {
-                error!("❌ Migration failed: {}", e);
-                return Err(format!("Database migration failed: {}", e).into());
+                Err(e) => {
+                    error!("❌ Migration failed: {}", e);
+                    return Err(format!("Database migration failed: {}", e).into());
+                }
             }
         }
         
+        // Create connection pool with 3 read connections
+        let pool = ConnectionPool::new(&path.as_ref(), 3)?;
+        info!("✅ Connection pool established (1 write + 3 read connections)");
+        
         let db = Database { 
-            conn,
+            pool,
             sync_in_progress: AtomicBool::new(false),
         };
         
@@ -382,6 +447,31 @@ impl Database {
         Ok(db)
     }
     
+    // Connection pool helpers
+    fn with_read_conn<T, F>(&self, f: F) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+    where
+        F: FnOnce(&Connection) -> Result<T, Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let conn = self.pool.get_read_conn()?;
+        let result = f(&conn);
+        self.pool.return_read_conn(conn);
+        result
+    }
+    
+    fn with_write_conn<T, F>(&self, f: F) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let write_conn = self.pool.get_write_conn();
+        let mut conn = write_conn.lock().unwrap();
+        f(&mut *conn)
+    }
+    
+    // Temporary helper for remaining conn usage
+    fn get_conn(&self) -> Arc<std::sync::Mutex<Connection>> {
+        self.pool.get_write_conn()
+    }
+
     // デバッグ用: sync状態を確認・リセット
     pub fn get_sync_status(&self) -> bool {
         self.sync_in_progress.load(Ordering::Acquire)
@@ -401,59 +491,19 @@ impl Database {
     }
 
     // Provider operations
-    pub fn get_providers(&self) -> Result<Vec<GitProvider>, Box<dyn std::error::Error>> {
+    pub fn get_providers(&self) -> Result<Vec<GitProvider>, Box<dyn std::error::Error + Send + Sync>> {
         debug!("📋 Fetching all providers");
         
-        let mut stmt = self.conn.prepare(
-            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
-                    gp.is_initialized, gp.created_at, gp.updated_at
-             FROM git_providers gp
-             JOIN provider_types pt ON gp.provider_type_id = pt.id
-             ORDER BY gp.name"
-        )?;
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
+                        gp.is_initialized, gp.created_at, gp.updated_at
+                 FROM git_providers gp
+                 JOIN provider_types pt ON gp.provider_type_id = pt.id
+                 ORDER BY gp.name"
+            )?;
 
-        let provider_iter = stmt.query_map([], |row| {
-            Ok(GitProvider {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                provider_type: row.get(2)?,
-                base_url: row.get(3)?,
-                api_base_url: row.get(4)?,
-                token: row.get(5)?,
-                token_valid: row.get::<_, bool>(6).unwrap_or(false),
-                is_initialized: row.get::<_, bool>(7).unwrap_or(false),
-                created_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
-                updated_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
-            })
-        })?;
-
-        let mut providers = Vec::new();
-        for provider in provider_iter {
-            providers.push(provider?);
-        }
-
-        info!("📊 Found {} providers", providers.len());
-        if !providers.is_empty() {
-            debug!("Provider names: {:?}", providers.iter().map(|p| &p.name).collect::<Vec<_>>());
-            for provider in &providers {
-                debug!("Provider {}: is_initialized={}, token_valid={}, has_token={}", 
-                    provider.name, provider.is_initialized, provider.token_valid, provider.token.is_some());
-            }
-        }
-        Ok(providers)
-    }
-
-    pub fn get_provider(&self, provider_id: i64) -> Result<GitProvider, Box<dyn std::error::Error + Send + Sync>> {
-        debug!("🔍 Fetching provider: {}", provider_id);
-        
-        let provider = self.conn.query_row(
-            "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
-                    gp.is_initialized, gp.created_at, gp.updated_at
-             FROM git_providers gp
-             JOIN provider_types pt ON gp.provider_type_id = pt.id
-             WHERE gp.id = ?",
-            [provider_id],
-            |row| {
+            let provider_iter = stmt.query_map([], |row| {
                 Ok(GitProvider {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -466,25 +516,70 @@ impl Database {
                     created_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
                     updated_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
                 })
+            })?;
+
+            let mut providers = Vec::new();
+            for provider in provider_iter {
+                providers.push(provider?);
             }
-        )?;
-        
-        debug!("✅ Found provider: {} ({})", provider.name, provider.provider_type);
-        Ok(provider)
+
+            info!("📊 Found {} providers", providers.len());
+            if !providers.is_empty() {
+                debug!("Provider names: {:?}", providers.iter().map(|p| &p.name).collect::<Vec<_>>());
+                for provider in &providers {
+                    debug!("Provider {}: is_initialized={}, token_valid={}, has_token={}", 
+                        provider.name, provider.is_initialized, provider.token_valid, provider.token.is_some());
+                }
+            }
+            Ok(providers)
+        })
     }
 
-    pub fn add_provider(&mut self, provider: &GitProvider) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn get_provider(&self, provider_id: i64) -> Result<GitProvider, Box<dyn std::error::Error + Send + Sync>> {
+        debug!("🔍 Fetching provider: {}", provider_id);
+        
+        self.with_read_conn(|conn| {
+            let provider = conn.query_row(
+                "SELECT gp.id, gp.name, pt.code, gp.base_url, gp.api_base_url, gp.token, gp.token_valid,
+                        gp.is_initialized, gp.created_at, gp.updated_at
+                 FROM git_providers gp
+                 JOIN provider_types pt ON gp.provider_type_id = pt.id
+                 WHERE gp.id = ?",
+                [provider_id],
+                |row| {
+                    Ok(GitProvider {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        provider_type: row.get(2)?,
+                        base_url: row.get(3)?,
+                        api_base_url: row.get(4)?,
+                        token: row.get(5)?,
+                        token_valid: row.get::<_, bool>(6).unwrap_or(false),
+                        is_initialized: row.get::<_, bool>(7).unwrap_or(false),
+                    created_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+                    updated_at: row.get::<_, String>(9)?.parse().unwrap_or_else(|_| Utc::now()),
+                })
+            }
+            )?;
+            
+            debug!("✅ Found provider: {} ({})", provider.name, provider.provider_type);
+            Ok(provider)
+        })
+    }
+
+    pub fn add_provider(&self, provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("➕ Adding provider: {} ({})", provider.name, provider.provider_type);
         debug!("Provider details: url={}", provider.base_url);
         
-        // Get provider_type_id from provider_types table
-        let provider_type_id: i64 = self.conn.query_row(
-            "SELECT id FROM provider_types WHERE code = ?",
-            [&provider.provider_type],
-            |row| row.get(0)
-        )?;
-        
-        let result = self.conn.execute(
+        self.with_write_conn(|conn| {
+            // Get provider_type_id from provider_types table
+            let provider_type_id: i64 = conn.query_row(
+                "SELECT id FROM provider_types WHERE code = ?",
+                [&provider.provider_type],
+                |row| row.get(0)
+            )?;
+            
+            let result = conn.execute(
             "INSERT INTO git_providers (name, provider_type_id, base_url, token, token_valid, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
@@ -496,28 +591,32 @@ impl Database {
                 &provider.created_at.to_rfc3339(),
                 &provider.updated_at.to_rfc3339(),
             ],
-        )?;
-        
-        debug!("Database insert affected {} rows", result);
-        info!("✅ Provider added successfully: {}", provider.name);
-        Ok(())
+            )?;
+            
+            debug!("Database insert affected {} rows", result);
+            info!("✅ Provider added successfully: {}", provider.name);
+            Ok(())
+        })
     }
 
-    pub fn delete_provider(&mut self, provider_id: i64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn delete_provider(&self, provider_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Deleting provider: {}", provider_id);
         
-        // Delete provider (cascade will handle related repositories)
-        self.conn.execute("DELETE FROM git_providers WHERE id = ?", [provider_id])?;
-        
-        info!("Provider deleted successfully");
-        Ok(())
+        self.with_write_conn(|conn| {
+            // Delete provider (cascade will handle related repositories)
+            conn.execute("DELETE FROM git_providers WHERE id = ?", [provider_id])?;
+            
+            info!("Provider deleted successfully");
+            Ok(())
+        })
     }
 
     // Repository operations
-    pub fn get_repositories(&self) -> Result<Vec<Repository>, Box<dyn std::error::Error>> {
+    pub fn get_repositories(&self) -> Result<Vec<Repository>, Box<dyn std::error::Error + Send + Sync>> {
         debug!("📋 Fetching all repositories");
         
-        let mut stmt = self.conn.prepare(
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
                     r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at,
@@ -590,17 +689,19 @@ impl Database {
             repositories.push(repo?);
         }
 
-        info!("📊 Found {} repositories", repositories.len());
-        if !repositories.is_empty() {
-            debug!("Repository names: {:?}", repositories.iter().map(|r| &r.name).collect::<Vec<_>>());
-        }
-        Ok(repositories)
+            info!("📊 Found {} repositories", repositories.len());
+            if !repositories.is_empty() {
+                debug!("Repository names: {:?}", repositories.iter().map(|r| &r.name).collect::<Vec<_>>());
+            }
+            Ok(repositories)
+        })
     }
 
     pub fn get_repositories_by_provider(&self, provider_id: i64) -> Result<Vec<Repository>, Box<dyn std::error::Error + Send + Sync>> {
         info!("Fetching repositories for provider: {}", provider_id);
         
-        let mut stmt = self.conn.prepare(
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
                     r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at,
@@ -674,14 +775,15 @@ impl Database {
             repositories.push(repo?);
         }
 
-        info!("Found {} repositories for provider {}", repositories.len(), provider_id);
-        Ok(repositories)
+            info!("Found {} repositories for provider {}", repositories.len(), provider_id);
+            Ok(repositories)
+        })
     }
 
-    pub fn get_repository(&self, repository_id: i64) -> Result<Repository, Box<dyn std::error::Error>> {
+    pub fn get_repository(&self, repository_id: i64) -> Result<Repository, Box<dyn std::error::Error + Send + Sync>> {
         info!("Fetching repository: {}", repository_id);
         
-        let repository = self.conn.query_row(
+        let repository = self.get_conn().lock().unwrap().query_row(
             "SELECT r.id, r.api_id, r.name, r.full_name, r.description, r.provider_id,
                     r.web_url, r.api_base_url, r.is_private, r.language, r.last_activity, 
                     r.api_created_at, r.api_updated_at, r.created_at, r.updated_at,
@@ -751,12 +853,13 @@ impl Database {
         Ok(repository)
     }
 
-    pub fn add_repository(&mut self, repository: &Repository) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn add_repository(&self, repository: &Repository) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("➕ Adding repository: {} ({})", repository.name, repository.provider_name);
         debug!("Repository details: api_id={}, url={}, private={}", 
             repository.api_id, repository.web_url, repository.is_private);
         
-        let result = self.conn.execute(
+        self.with_write_conn(|conn| {
+            let result = conn.execute(
             "INSERT INTO repositories 
              (provider_id, api_id, name, full_name, description, web_url, api_base_url, is_private, 
               language, last_activity, api_created_at, api_updated_at, created_at, updated_at)
@@ -777,24 +880,27 @@ impl Database {
                 &repository.created_at.to_rfc3339(),
                 &repository.updated_at.to_rfc3339(),
             ],
-        )?;
-        
-        debug!("Database insert affected {} rows", result);
-        info!("✅ Repository added successfully: {}", repository.name);
-        Ok(())
+            )?;
+            
+            debug!("Database insert affected {} rows", result);
+            info!("✅ Repository added successfully: {}", repository.name);
+            Ok(())
+        })
     }
 
-    pub fn delete_repository(&mut self, repository_id: i64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn delete_repository(&self, repository_id: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Deleting repository: {}", repository_id);
         
-        self.conn.execute("DELETE FROM repositories WHERE id = ?", [repository_id])?;
-        
-        info!("Repository deleted successfully");
-        Ok(())
+        self.with_write_conn(|conn| {
+            conn.execute("DELETE FROM repositories WHERE id = ?", [repository_id])?;
+            
+            info!("Repository deleted successfully");
+            Ok(())
+        })
     }
 
     // Issue operations with pagination
-    pub fn get_issues(&self, filters: &Option<IssueFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<Issue>, Box<dyn std::error::Error>> {
+    pub fn get_issues(&self, filters: &Option<IssueFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<Issue>, Box<dyn std::error::Error + Send + Sync>> {
         debug!("📋 Fetching issues with filters and pagination");
         if let Some(f) = filters {
             debug!("Filters applied: state={:?}, assigned={:?}, provider={:?}", 
@@ -855,7 +961,11 @@ impl Database {
         // Count total for pagination
         let count_query = format!("SELECT COUNT(*) FROM ({}) AS counted", query);
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let total: u32 = self.conn.query_row(&count_query, param_refs.as_slice(), |row| row.get::<_, i64>(0))? as u32;
+        let total: u32 = self.with_read_conn(|conn| {
+            conn.query_row(&count_query, param_refs.as_slice(), |row| row.get::<_, i64>(0))
+                .map(|count| count as u32)
+                .map_err(|e| e.into())
+        })?;
 
         // Apply pagination
         let page = pagination.as_ref().map(|p| p.page).unwrap_or(1);
@@ -894,9 +1004,9 @@ impl Database {
         params.push(Box::new(offset));
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&query)?;
-        
-        let issue_iter = stmt.query_map(param_refs.as_slice(), |row| {
+        let issues = self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let issue_iter = stmt.query_map(param_refs.as_slice(), |row| {
             let labels_str: String = row.get(9)?;
             let labels: Vec<String> = serde_json::from_str(&labels_str).unwrap_or_else(|_| Vec::new());
             
@@ -930,10 +1040,12 @@ impl Database {
             })
         })?;
 
-        let mut issues = Vec::new();
-        for issue in issue_iter {
-            issues.push(issue?);
-        }
+            let mut issues = Vec::new();
+            for issue in issue_iter {
+                issues.push(issue?);
+            }
+            Ok(issues)
+        })?;
 
         info!("📊 Found {} issues (page {} of {}, total: {})", issues.len(), page, total_pages, total);
         if !issues.is_empty() {
@@ -952,7 +1064,7 @@ impl Database {
     }
 
     // Stub implementations for other methods to maintain compatibility
-    pub fn get_issue(&self, issue_id: i64) -> Result<Issue, Box<dyn std::error::Error>> {
+    pub fn get_issue(&self, issue_id: i64) -> Result<Issue, Box<dyn std::error::Error + Send + Sync>> {
         let query = "SELECT i.id, i.api_id, i.repository_id, i.number, i.title, 
                             r.name as repository, p.name as provider, i.assigned_to_me, i.author, 
                             ist.code as state, i.labels, i.url, i.closed_at, 
@@ -963,7 +1075,7 @@ impl Database {
                      JOIN issue_states ist ON i.state_id = ist.id
                      WHERE i.id = ?";
         
-        self.conn.query_row(query, [issue_id], |row| {
+        self.get_conn().lock().unwrap().query_row(query, [issue_id], |row| {
             let labels_str: String = row.get("labels").unwrap_or_default();
             let labels: Vec<String> = if labels_str.is_empty() {
                 Vec::new()
@@ -993,20 +1105,20 @@ impl Database {
         }).map_err(|e| e.into())
     }
 
-    pub fn get_issue_stats(&self, _filters: &Option<IssueFilters>) -> Result<IssueStats, Box<dyn std::error::Error>> {
-        let total: i64 = self.conn.query_row(
+    pub fn get_issue_stats(&self, _filters: &Option<IssueFilters>) -> Result<IssueStats, Box<dyn std::error::Error + Send + Sync>> {
+        let total: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT COUNT(*) FROM issues", 
             [], 
             |row| row.get(0)
         )?;
         
-        let open: i64 = self.conn.query_row(
+        let open: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT COUNT(*) FROM issues i JOIN issue_states ist ON i.state_id = ist.id WHERE ist.code = 'open'", 
             [], 
             |row| row.get(0)
         )?;
         
-        let closed: i64 = self.conn.query_row(
+        let closed: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT COUNT(*) FROM issues i JOIN issue_states ist ON i.state_id = ist.id WHERE ist.code = 'closed'", 
             [], 
             |row| row.get(0)
@@ -1019,7 +1131,7 @@ impl Database {
         })
     }
 
-    pub fn get_pull_requests(&self, filters: &Option<PullRequestFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<PullRequest>, Box<dyn std::error::Error>> {
+    pub fn get_pull_requests(&self, filters: &Option<PullRequestFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<PullRequest>, Box<dyn std::error::Error + Send + Sync>> {
         let mut query = String::from(
             "SELECT pr.id, pr.api_id, pr.repository_id, pr.number, pr.title, 
                     r.name as repository, p.name as provider, pr.assigned_to_me, pr.author, 
@@ -1069,11 +1181,11 @@ impl Database {
         
         let count_query = format!("SELECT COUNT(*) FROM ({}) AS count_subquery", query);
         
-        let total: i64 = {
-            let mut stmt = self.conn.prepare(&count_query)?;
+        let total: i64 = self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&count_query)?;
             let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
         query.push_str(" ORDER BY pr.api_created_at DESC");
         
@@ -1086,10 +1198,11 @@ impl Database {
         let offset = (page - 1) * per_page;
         query.push_str(&format!(" LIMIT {} OFFSET {}", per_page, offset));
         
-        let mut stmt = self.conn.prepare(&query)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(&param_refs[..], |row| {
-            Ok(PullRequest {
+        let pull_requests = self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(&param_refs[..], |row| {
+                Ok(PullRequest {
                 id: row.get("id")?,
                 api_id: row.get("api_id")?,
                 repository_id: row.get("repository_id")?,
@@ -1108,13 +1221,15 @@ impl Database {
                 api_updated_at: row.get("api_updated_at")?,
                 created_at: row.get("created_at")?,
                 updated_at: row.get("updated_at")?,
-            })
-        })?;
+                })
+            })?;
         
-        let mut pull_requests = Vec::new();
-        for row in rows {
-            pull_requests.push(row?);
-        }
+            let mut pull_requests = Vec::new();
+            for row in rows {
+                pull_requests.push(row?);
+            }
+            Ok(pull_requests)
+        })?;
         
         Ok(PaginatedResponse {
             data: pull_requests,
@@ -1127,7 +1242,7 @@ impl Database {
         })
     }
 
-    pub fn get_pull_request(&self, pr_id: i64) -> Result<PullRequest, Box<dyn std::error::Error>> {
+    pub fn get_pull_request(&self, pr_id: i64) -> Result<PullRequest, Box<dyn std::error::Error + Send + Sync>> {
         let query = "SELECT pr.id, pr.api_id, pr.repository_id, pr.number, pr.title, 
                             r.name as repository, p.name as provider, pr.assigned_to_me, pr.author, 
                             ps.code as state, pr.draft, pr.url, pr.merged_at, pr.closed_at, 
@@ -1138,7 +1253,7 @@ impl Database {
                      JOIN pull_request_states ps ON pr.state_id = ps.id
                      WHERE pr.id = ?";
         
-        self.conn.query_row(query, [pr_id], |row| {
+        self.get_conn().lock().unwrap().query_row(query, [pr_id], |row| {
             Ok(PullRequest {
                 id: row.get("id")?,
                 api_id: row.get("api_id")?,
@@ -1162,7 +1277,7 @@ impl Database {
         }).map_err(|e| e.into())
     }
 
-    pub fn get_pull_request_stats(&self, filters: &Option<PullRequestFilters>) -> Result<PullRequestStats, Box<dyn std::error::Error>> {
+    pub fn get_pull_request_stats(&self, filters: &Option<PullRequestFilters>) -> Result<PullRequestStats, Box<dyn std::error::Error + Send + Sync>> {
         let mut base_query = String::from(
             "FROM pull_requests pr
              JOIN repositories r ON pr.repository_id = r.id
@@ -1191,29 +1306,29 @@ impl Database {
         
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         
-        let total: i64 = {
+        let total: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {}", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let open: i64 = {
+        let open: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ps.code = 'open'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let closed: i64 = {
+        let closed: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ps.code = 'closed'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let merged: i64 = {
+        let merged: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ps.code = 'merged'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
         Ok(PullRequestStats {
             total: total as u32,
@@ -1223,7 +1338,7 @@ impl Database {
         })
     }
 
-    pub fn get_workflows(&self, filters: &Option<WorkflowFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<WorkflowRun>, Box<dyn std::error::Error>> {
+    pub fn get_workflows(&self, filters: &Option<WorkflowFilters>, pagination: &Option<PaginationParams>) -> Result<PaginatedResponse<WorkflowRun>, Box<dyn std::error::Error + Send + Sync>> {
         let mut query = String::from(
             "SELECT w.id, w.api_id, w.repository_id, w.name, 
                     r.name as repository, p.name as provider, ws.code as status, 
@@ -1281,11 +1396,11 @@ impl Database {
         
         let count_query = format!("SELECT COUNT(*) FROM ({}) AS count_subquery", query);
         
-        let total: i64 = {
-            let mut stmt = self.conn.prepare(&count_query)?;
+        let total: i64 = self.with_read_conn(|conn| {
             let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&count_query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
         query.push_str(" ORDER BY w.api_created_at DESC");
         
@@ -1298,9 +1413,10 @@ impl Database {
         let offset = (page - 1) * per_page;
         query.push_str(&format!(" LIMIT {} OFFSET {}", per_page, offset));
         
-        let mut stmt = self.conn.prepare(&query)?;
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(&param_refs[..], |row| {
+        let workflows = self.with_read_conn(|conn| {
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let mut stmt = conn.prepare(&query)?;
+            let rows = stmt.query_map(&param_refs[..], |row| {
             Ok(WorkflowRun {
                 id: row.get("id")?,
                 api_id: row.get("api_id")?,
@@ -1315,13 +1431,15 @@ impl Database {
                 api_updated_at: row.get("api_updated_at")?,
                 created_at: row.get("created_at")?,
                 updated_at: row.get("updated_at")?,
-            })
-        })?;
+                })
+            })?;
         
-        let mut workflows = Vec::new();
-        for row in rows {
-            workflows.push(row?);
-        }
+            let mut workflows = Vec::new();
+            for row in rows {
+                workflows.push(row?);
+            }
+            Ok(workflows)
+        })?;
         
         Ok(PaginatedResponse {
             data: workflows,
@@ -1334,7 +1452,7 @@ impl Database {
         })
     }
 
-    pub fn get_workflow(&self, workflow_id: i64) -> Result<WorkflowRun, Box<dyn std::error::Error>> {
+    pub fn get_workflow(&self, workflow_id: i64) -> Result<WorkflowRun, Box<dyn std::error::Error + Send + Sync>> {
         let query = "SELECT w.id, w.api_id, w.repository_id, w.name, 
                             r.name as repository, p.name as provider, ws.code as status, 
                             wc.code as conclusion, w.url, w.api_created_at, w.api_updated_at, 
@@ -1346,7 +1464,7 @@ impl Database {
                      LEFT JOIN workflow_conclusions wc ON w.conclusion_id = wc.id
                      WHERE w.id = ?";
         
-        self.conn.query_row(query, [workflow_id], |row| {
+        self.get_conn().lock().unwrap().query_row(query, [workflow_id], |row| {
             Ok(WorkflowRun {
                 id: row.get("id")?,
                 api_id: row.get("api_id")?,
@@ -1365,7 +1483,7 @@ impl Database {
         }).map_err(|e| e.into())
     }
 
-    pub fn get_workflow_stats(&self, filters: &Option<WorkflowFilters>) -> Result<WorkflowStats, Box<dyn std::error::Error>> {
+    pub fn get_workflow_stats(&self, filters: &Option<WorkflowFilters>) -> Result<WorkflowStats, Box<dyn std::error::Error + Send + Sync>> {
         let mut base_query = String::from(
             "FROM workflow_runs w
              JOIN repositories r ON w.repository_id = r.id
@@ -1394,35 +1512,35 @@ impl Database {
         
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         
-        let total: i64 = {
+        let total: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {}", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let success: i64 = {
+        let success: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ws.code = 'success'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let failure: i64 = {
+        let failure: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ws.code = 'failure'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let in_progress: i64 = {
+        let in_progress: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ws.code = 'in_progress'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
-        let cancelled: i64 = {
+        let cancelled: i64 = self.with_read_conn(|conn| {
             let query = format!("SELECT COUNT(*) {} AND ws.code = 'cancelled'", base_query);
-            let mut stmt = self.conn.prepare(&query)?;
-            stmt.query_row(&param_refs[..], |row| row.get(0))?
-        };
+            let mut stmt = conn.prepare(&query)?;
+            stmt.query_row(&param_refs[..], |row| row.get(0)).map_err(|e| e.into())
+        })?;
         
         Ok(WorkflowStats {
             total: total as u32,
@@ -1500,7 +1618,7 @@ impl Database {
         }
 
         // Get provider name for history
-        let provider_name = match self.conn.query_row("SELECT name FROM git_providers WHERE id = ?", [provider_id], |row| {
+        let provider_name = match self.get_conn().lock().unwrap().query_row("SELECT name FROM git_providers WHERE id = ?", [provider_id], |row| {
             Ok(row.get::<_, String>(0)?)
         }) {
             Ok(name) => name,
@@ -1574,7 +1692,7 @@ impl Database {
                 // Update sync status for issues only
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1592,7 +1710,7 @@ impl Database {
                 
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1618,7 +1736,7 @@ impl Database {
                 
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1636,7 +1754,7 @@ impl Database {
                 
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1662,7 +1780,7 @@ impl Database {
                 
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1680,7 +1798,7 @@ impl Database {
                 
                 let now = Utc::now().to_rfc3339();
                 let success_status_id = self.get_sync_status_id("success")?;
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo.id],
                 )?;
@@ -1714,8 +1832,8 @@ impl Database {
         info!("Syncing all providers");
         
         // Get all provider IDs
-        let provider_ids: Vec<i64> = {
-            let mut stmt = self.conn.prepare("SELECT id FROM git_providers").map_err(|e| {
+        let provider_ids: Vec<i64> = self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT id FROM git_providers").map_err(|e| {
                 self.sync_in_progress.store(false, Ordering::Release);
                 format!("Database error: {}", e)
             })?;
@@ -1733,8 +1851,11 @@ impl Database {
                     format!("Database error: {}", e)
                 })?);
             }
-            ids
-        };
+            Ok(ids)
+        }).map_err(|e| {
+            self.sync_in_progress.store(false, Ordering::Release);
+            format!("Database error: {}", e)
+        })?;
         
         // Keep the sync lock and sync each provider directly without recursion
         let mut total_errors = 0;
@@ -1786,7 +1907,7 @@ impl Database {
 
     // Helper functions for lookup tables
     pub fn get_provider_type_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let id: i64 = self.conn.query_row(
+        let id: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM provider_types WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1795,7 +1916,7 @@ impl Database {
     }
 
     pub fn get_issue_state_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let id: i64 = self.conn.query_row(
+        let id: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM issue_states WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1804,7 +1925,7 @@ impl Database {
     }
 
     pub fn get_pr_state_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let id: i64 = self.conn.query_row(
+        let id: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM pull_request_states WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1813,7 +1934,7 @@ impl Database {
     }
 
     pub fn get_workflow_status_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let result = self.conn.query_row(
+        let result = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM workflow_statuses WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1824,7 +1945,7 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 warn!("Unknown workflow status '{}', using default 'in_progress'", code);
                 // Fallback to in_progress status
-                let id: i64 = self.conn.query_row(
+                let id: i64 = self.get_conn().lock().unwrap().query_row(
                     "SELECT id FROM workflow_statuses WHERE code = 'in_progress'",
                     [],
                     |row| row.get(0)
@@ -1836,7 +1957,7 @@ impl Database {
     }
 
     pub fn get_workflow_conclusion_id(&self, code: &str) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
-        let id: Option<i64> = self.conn.query_row(
+        let id: Option<i64> = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM workflow_conclusions WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1845,7 +1966,7 @@ impl Database {
     }
 
     pub fn get_sync_status_id(&self, code: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let id: i64 = self.conn.query_row(
+        let id: i64 = self.get_conn().lock().unwrap().query_row(
             "SELECT id FROM sync_statuses WHERE code = ?",
             [code],
             |row| row.get(0)
@@ -1859,19 +1980,19 @@ impl Database {
         
         match sync_type {
             "issues" => {
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_issues_sync_success = ?, last_issues_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
             },
             "pull_requests" => {
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_pull_requests_sync_success = ?, last_pull_requests_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
             },
             "workflows" => {
-                self.conn.execute(
+                self.get_conn().lock().unwrap().execute(
                     "UPDATE repositories SET last_workflows_sync_success = ?, last_workflows_sync_status_id = ?, updated_at = ? WHERE id = ?",
                     rusqlite::params![&now, success_status_id, &now, repo_id],
                 )?;
@@ -1885,7 +2006,7 @@ impl Database {
         info!("Syncing repository: {}", repository_id);
         
         // Update the repository's last_activity and updated_at timestamp
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "UPDATE repositories SET last_activity = ?, updated_at = ? WHERE id = ?",
             rusqlite::params![
                 Utc::now().to_rfc3339(),
@@ -1898,7 +2019,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_provider_token(&mut self, provider_id: i64, token: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn update_provider_token(&self, provider_id: i64, token: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Updating provider token: {}", provider_id);
         
         // When updating token, also update token_valid status
@@ -1908,40 +2029,44 @@ impl Database {
             _ => false
         };
         
-        self.conn.execute(
-            "UPDATE git_providers SET token = ?, token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
-            rusqlite::params![
-                token,
-                token_valid,
-                token_valid, // is_initialized should be true when token is valid
-                Utc::now().to_rfc3339(),
-                provider_id
-            ],
-        )?;
+        self.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE git_providers SET token = ?, token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
+                rusqlite::params![
+                    token,
+                    token_valid,
+                    token_valid, // is_initialized should be true when token is valid
+                    Utc::now().to_rfc3339(),
+                    provider_id
+                ],
+            )?;
 
-        info!("Provider token updated successfully (token_valid: {})", token_valid);
-        Ok(())
+            info!("Provider token updated successfully (token_valid: {})", token_valid);
+            Ok(())
+        })
     }
 
-    pub fn update_provider_token_validation(&mut self, provider_id: i64, is_valid: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn update_provider_token_validation(&self, provider_id: i64, is_valid: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Updating provider token validation: {} -> {}", provider_id, is_valid);
         
         // Note: We no longer update sync timestamps during token validation
         // Sync timestamps are now resource-specific and updated during actual sync operations
         
         // Update token validation status but don't update sync timestamps
-        self.conn.execute(
-            "UPDATE git_providers SET token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
-            rusqlite::params![
-                is_valid,
-                is_valid, // is_initialized should match token validity
-                Utc::now().to_rfc3339(),
-                provider_id
-            ],
-        )?;
+        self.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE git_providers SET token_valid = ?, is_initialized = ?, updated_at = ? WHERE id = ?",
+                rusqlite::params![
+                    is_valid,
+                    is_valid, // is_initialized should match token validity
+                    Utc::now().to_rfc3339(),
+                    provider_id
+                ],
+            )?;
 
-        info!("Provider token validation updated successfully");
-        Ok(())
+            info!("Provider token validation updated successfully");
+            Ok(())
+        })
     }
 
     // API client methods
@@ -2350,7 +2475,7 @@ impl Database {
         let labels_json = serde_json::to_string(&github_issue.labels.iter().map(|l| &l.name).collect::<Vec<_>>())?;
         let assignees_me = github_issue.assignees.iter().any(|a| a.login == "me"); // TODO: Replace with actual user check
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO issues (
                 repository_id, state_id, api_id, api_created_at, api_updated_at,
                 title, number, author, assigned_to_me, labels, closed_at, url,
@@ -2382,7 +2507,7 @@ impl Database {
         let state_id = self.get_pr_state_id(&github_pr.state)?;
         let assignees_me = github_pr.assignees.iter().any(|a| a.login == "me"); // TODO: Replace with actual user check
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO pull_requests (
                 repository_id, state_id, api_id, api_created_at, api_updated_at,
                 title, number, author, assigned_to_me, draft, merged_at, closed_at, url,
@@ -2419,7 +2544,7 @@ impl Database {
             None
         };
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO workflow_runs (
                 repository_id, status_id, conclusion_id, api_id, api_created_at, api_updated_at,
                 name, url, created_at, updated_at
@@ -2447,7 +2572,7 @@ impl Database {
         let labels_json = serde_json::to_string(&gitlab_issue.labels)?;
         let assignees_me = gitlab_issue.assignees.iter().any(|a| a.username == "me"); // TODO: Replace with actual user check
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO issues (
                 repository_id, state_id, api_id, api_created_at, api_updated_at,
                 title, number, author, assigned_to_me, labels, closed_at, url,
@@ -2479,7 +2604,7 @@ impl Database {
         let state_id = self.get_pr_state_id(&gitlab_mr.state)?;
         let assignees_me = gitlab_mr.assignees.iter().any(|a| a.username == "me"); // TODO: Replace with actual user check
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO pull_requests (
                 repository_id, state_id, api_id, api_created_at, api_updated_at,
                 title, number, author, assigned_to_me, draft, merged_at, closed_at, url,
@@ -2511,7 +2636,7 @@ impl Database {
     fn upsert_pipeline_from_gitlab(&mut self, gitlab_pipeline: &GitLabPipeline, repo: &Repository, _provider: &GitProvider) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let status_id = self.get_workflow_status_id(&gitlab_pipeline.status)?;
         
-        self.conn.execute(
+        self.get_conn().lock().unwrap().execute(
             "INSERT OR REPLACE INTO workflow_runs (
                 repository_id, status_id, conclusion_id, api_id, api_created_at, api_updated_at,
                 name, url, created_at, updated_at
@@ -2537,90 +2662,96 @@ impl Database {
     // Sync History methods
     pub fn create_sync_history(&mut self, sync_type: &str, target_id: Option<i64>, target_name: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let now = Utc::now();
-        let mut stmt = self.conn.prepare(
-            "INSERT INTO sync_history (
-                sync_type, target_id, target_name, status, started_at, created_at, updated_at
-            ) VALUES (?, ?, ?, 'started', ?, ?, ?)"
-        )?;
-        
-        stmt.execute(rusqlite::params![
-            sync_type,
-            target_id,
-            target_name,
-            now.to_rfc3339(),
-            now.to_rfc3339(),
-            now.to_rfc3339()
-        ])?;
-        
-        Ok(self.conn.last_insert_rowid())
+        self.with_write_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "INSERT INTO sync_history (
+                    sync_type, target_id, target_name, status, started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 'started', ?, ?, ?)"
+            )?;
+            
+            stmt.execute(rusqlite::params![
+                sync_type,
+                target_id,
+                target_name,
+                now.to_rfc3339(),
+                now.to_rfc3339(),
+                now.to_rfc3339()
+            ])?;
+            
+            Ok(conn.last_insert_rowid())
+        })
     }
 
     pub fn update_sync_history_completed(&mut self, history_id: i64, items_synced: i32, repositories_synced: i32, errors_count: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let completed_at = Utc::now();
         
-        // Get the started_at time to calculate duration
-        let mut stmt = self.conn.prepare("SELECT started_at FROM sync_history WHERE id = ?")?;
-        let started_at_str: String = stmt.query_row(rusqlite::params![history_id], |row| {
-            Ok(row.get(0)?)
-        })?;
-        
-        let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
-        let duration_seconds = (completed_at - started_at).num_seconds() as i32;
-        
-        self.conn.execute(
-            "UPDATE sync_history SET 
-                status = 'completed', 
-                items_synced = ?, 
-                repositories_synced = ?, 
-                errors_count = ?, 
-                completed_at = ?, 
-                duration_seconds = ?,
-                updated_at = ?
-            WHERE id = ?",
-            rusqlite::params![
-                items_synced,
-                repositories_synced,
-                errors_count,
-                completed_at.to_rfc3339(),
-                duration_seconds,
-                completed_at.to_rfc3339(),
-                history_id
-            ]
-        )?;
-        
-        Ok(())
+        self.with_write_conn(|conn| {
+            // Get the started_at time to calculate duration
+            let mut stmt = conn.prepare("SELECT started_at FROM sync_history WHERE id = ?")?;
+            let started_at_str: String = stmt.query_row(rusqlite::params![history_id], |row| {
+                Ok(row.get(0)?)
+            })?;
+            
+            let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
+            let duration_seconds = (completed_at - started_at).num_seconds() as i32;
+            
+            conn.execute(
+                "UPDATE sync_history SET 
+                    status = 'completed', 
+                    items_synced = ?, 
+                    repositories_synced = ?, 
+                    errors_count = ?, 
+                    completed_at = ?, 
+                    duration_seconds = ?,
+                    updated_at = ?
+                WHERE id = ?",
+                rusqlite::params![
+                    items_synced,
+                    repositories_synced,
+                    errors_count,
+                    completed_at.to_rfc3339(),
+                    duration_seconds,
+                    completed_at.to_rfc3339(),
+                    history_id
+                ]
+            )?;
+            
+            Ok(())
+        })
     }
 
     pub fn update_sync_history_failed(&mut self, history_id: i64, error_message: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let completed_at = Utc::now();
         
-        // Get the started_at time to calculate duration
-        let mut stmt = self.conn.prepare("SELECT started_at FROM sync_history WHERE id = ?")?;
-        let started_at_str: String = stmt.query_row(rusqlite::params![history_id], |row| {
-            Ok(row.get(0)?)
-        })?;
-        
-        let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
-        let duration_seconds = (completed_at - started_at).num_seconds() as i32;
-        
-        self.conn.execute(
-            "UPDATE sync_history SET 
-                status = 'failed', 
-                error_message = ?, 
-                completed_at = ?, 
-                duration_seconds = ?,
-                updated_at = ?
-            WHERE id = ?",
-            rusqlite::params![
-                error_message,
-                completed_at.to_rfc3339(),
-                duration_seconds,
-                completed_at.to_rfc3339(),
-                history_id
-            ]
-        )?;
-        
-        Ok(())
+        self.with_write_conn(|conn| {
+            // Get the started_at time to calculate duration
+            let mut stmt = conn.prepare("SELECT started_at FROM sync_history WHERE id = ?")?;
+            let started_at_str: String = stmt.query_row(rusqlite::params![history_id], |row| {
+                Ok(row.get(0)?)
+            })?;
+            
+            let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
+            let duration_seconds = (completed_at - started_at).num_seconds() as i32;
+            
+            conn.execute(
+                "UPDATE sync_history SET 
+                    status = 'failed', 
+                    error_message = ?, 
+                    completed_at = ?, 
+                    duration_seconds = ?,
+                    updated_at = ?
+                WHERE id = ?",
+                rusqlite::params![
+                    error_message,
+                    completed_at.to_rfc3339(),
+                    duration_seconds,
+                    completed_at.to_rfc3339(),
+                    history_id
+                ]
+            )?;
+            
+            Ok(())
+        })
     }
 
     pub fn get_sync_history(&self, limit: Option<u32>) -> Result<Vec<SyncHistory>, Box<dyn std::error::Error + Send + Sync>> {
@@ -2638,8 +2769,9 @@ impl Database {
             limit_clause
         );
         
-        let mut stmt = self.conn.prepare(&query)?;
-        let rows = stmt.query_map([], |row| {
+        let history_list = self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let rows = stmt.query_map([], |row| {
             let started_at_str: String = row.get(9)?;
             let completed_at_str: Option<String> = row.get(10)?;
             let created_at_str: String = row.get(12)?;
@@ -2656,17 +2788,19 @@ impl Database {
                 repositories_synced: row.get(7)?,
                 errors_count: row.get(8)?,
                 started_at: DateTime::parse_from_rfc3339(&started_at_str).map_err(|_e| rusqlite::Error::InvalidColumnType(9, "started_at".to_string(), rusqlite::types::Type::Text))?.with_timezone(&Utc),
-                completed_at: completed_at_str.map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                completed_at: completed_at_str.as_ref().map(|s| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)),
                 duration_seconds: row.get(11)?,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str).map_err(|_e| rusqlite::Error::InvalidColumnType(12, "created_at".to_string(), rusqlite::types::Type::Text))?.with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str).map_err(|_e| rusqlite::Error::InvalidColumnType(13, "updated_at".to_string(), rusqlite::types::Type::Text))?.with_timezone(&Utc),
-            })
-        })?;
+                })
+            })?;
         
-        let mut history_list = Vec::new();
-        for row_result in rows {
-            history_list.push(row_result?);
-        }
+            let mut history_list = Vec::new();
+            for row_result in rows {
+                history_list.push(row_result?);
+            }
+            Ok(history_list)
+        })?;
         
         Ok(history_list)
     }
